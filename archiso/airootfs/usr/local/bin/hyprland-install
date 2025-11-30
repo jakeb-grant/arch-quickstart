@@ -638,8 +638,14 @@ if ! command -v yay &>/dev/null; then
     rm -rf yay-bin
 fi
 
-# Install walker and elephant
-yay -S --noconfirm walker-bin elephant
+# Install walker and elephant with providers
+yay -S --noconfirm walker-bin elephant \
+    elephant-desktopapplications \
+    elephant-windows \
+    elephant-clipboard \
+    elephant-calc \
+    elephant-runner \
+    elephant-files
 AURSCRIPT
 
     chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
