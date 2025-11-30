@@ -326,7 +326,12 @@ install_base() {
     info "Installing base system..."
     echo
 
-    # Sync package databases first
+    # Initialize pacman keyring
+    info "Initializing pacman keyring..."
+    pacman-key --init
+    pacman-key --populate archlinux
+
+    # Sync package databases
     info "Syncing package databases..."
     pacman -Sy
 
