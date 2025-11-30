@@ -1,0 +1,47 @@
+# Target system packages
+# These packages are intended for installation on the target system
+# (not included in the live ISO itself)
+
+# Base system
+base
+base-devel
+linux
+linux-firmware
+linux-headers
+
+# Bootloader
+grub
+efibootmgr
+os-prober
+
+# Filesystem
+btrfs-progs
+dosfstools
+e2fsprogs
+ntfs-3g
+
+# Networking
+networkmanager
+openssh
+wget
+curl
+
+# System utilities
+sudo
+vim
+git
+htop
+man-db
+man-pages
+bash-completion
+zsh
+
+# Hardware
+amd-ucode
+intel-ucode
+
+# Audio
+pipewire
+pipewire-alsa
+pipewire-pulse
+wireplumber
