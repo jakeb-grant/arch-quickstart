@@ -80,7 +80,7 @@ which
 zsh
 
 # Diagnostic tools
-htop
+btop
 lsof
 strace
 
@@ -92,6 +92,9 @@ zip
 
 # Git and development
 git
+
+# Installer TUI
+gum
 
 # Terminfo for better terminal support
 foot-terminfo

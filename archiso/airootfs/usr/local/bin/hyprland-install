@@ -1,0 +1,447 @@
+#!/usr/bin/env bash
+#
+# Hyprland Arch Installer
+# A beautiful TUI installer for a custom Hyprland desktop
+#
+
+set -e
+
+# Colors for gum
+export GUM_CHOOSE_CURSOR_FOREGROUND="#89b4fa"
+export GUM_CHOOSE_SELECTED_FOREGROUND="#a6e3a1"
+export GUM_INPUT_CURSOR_FOREGROUND="#89b4fa"
+export GUM_INPUT_PROMPT_FOREGROUND="#cba6f7"
+export GUM_CONFIRM_PROMPT_FOREGROUND="#f9e2af"
+export GUM_SPIN_SPINNER_FOREGROUND="#89b4fa"
+
+# Package list location
+PACKAGES_FILE="/root/target-packages.x86_64"
+
+# -----------------------------------------------------------------------------
+# Helper Functions
+# -----------------------------------------------------------------------------
+
+die() {
+    gum style --foreground="#f38ba8" --bold "ERROR: $1"
+    exit 1
+}
+
+info() {
+    gum style --foreground="#89b4fa" "$1"
+}
+
+success() {
+    gum style --foreground="#a6e3a1" "$1"
+}
+
+warn() {
+    gum style --foreground="#f9e2af" "$1"
+}
+
+header() {
+    clear
+    gum style \
+        --border double \
+        --border-foreground="#cba6f7" \
+        --padding "1 2" \
+        --margin "1" \
+        --align center \
+        --bold \
+        "🌸 Hyprland Arch Installer 🌸"
+    echo
+}
+
+# -----------------------------------------------------------------------------
+# Welcome Screen
+# -----------------------------------------------------------------------------
+
+welcome() {
+    header
+    gum style \
+        --padding "1 2" \
+        --margin "0 2" \
+        "Welcome to the Hyprland Arch Linux installer!" \
+        "" \
+        "This will install a clean Arch Linux system with:" \
+        "  • Hyprland compositor" \
+        "  • SDDM display manager" \
+        "  • Waybar, Rofi, Ghostty" \
+        "  • Firefox, Nautilus" \
+        "  • Pipewire audio" \
+        "" \
+        "The installation will:" \
+        "  • Erase the selected disk completely" \
+        "  • Create GPT partitions (EFI + BTRFS root)" \
+        "  • Install all packages and configure the system"
+
+    echo
+    if ! gum confirm "Ready to proceed?"; then
+        gum style --foreground="#f9e2af" "Installation cancelled."
+        exit 0
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Disk Selection
+# -----------------------------------------------------------------------------
+
+select_disk() {
+    header
+    info "Scanning for available disks..."
+    echo
+
+    # Get list of disks (exclude loop devices and rom)
+    mapfile -t disks < <(lsblk -dpno NAME,SIZE,MODEL | grep -E '^/dev/(sd|nvme|vd)' | sort)
+
+    if [[ ${#disks[@]} -eq 0 ]]; then
+        die "No suitable disks found!"
+    fi
+
+    gum style --foreground="#cba6f7" "Select the target disk for installation:"
+    echo
+
+    DISK=$(printf '%s\n' "${disks[@]}" | gum choose --height=10)
+    DISK=$(echo "$DISK" | awk '{print $1}')
+
+    if [[ -z "$DISK" ]]; then
+        die "No disk selected!"
+    fi
+
+    echo
+    warn "WARNING: All data on $DISK will be destroyed!"
+    echo
+
+    lsblk "$DISK"
+    echo
+
+    if ! gum confirm --default=false "Are you sure you want to erase $DISK?"; then
+        die "Installation cancelled by user."
+    fi
+
+    # Double confirmation for safety
+    echo
+    gum style --foreground="#f38ba8" "Type 'yes' to confirm disk erasure:"
+    CONFIRM=$(gum input --placeholder "Type 'yes' to confirm")
+
+    if [[ "$CONFIRM" != "yes" ]]; then
+        die "Installation cancelled."
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# User Configuration
+# -----------------------------------------------------------------------------
+
+configure_user() {
+    header
+    gum style --foreground="#cba6f7" "Configure your user account:"
+    echo
+
+    # Hostname
+    info "Enter hostname:"
+    HOSTNAME=$(gum input --placeholder "archlinux" --value "archlinux")
+    HOSTNAME=${HOSTNAME:-archlinux}
+
+    echo
+
+    # Username
+    info "Enter username:"
+    USERNAME=$(gum input --placeholder "user")
+
+    if [[ -z "$USERNAME" ]]; then
+        die "Username cannot be empty!"
+    fi
+
+    echo
+
+    # Password
+    info "Enter password for $USERNAME:"
+    PASSWORD=$(gum input --password --placeholder "Password")
+
+    if [[ -z "$PASSWORD" ]]; then
+        die "Password cannot be empty!"
+    fi
+
+    info "Confirm password:"
+    PASSWORD_CONFIRM=$(gum input --password --placeholder "Confirm password")
+
+    if [[ "$PASSWORD" != "$PASSWORD_CONFIRM" ]]; then
+        die "Passwords do not match!"
+    fi
+
+    echo
+
+    # Timezone selection
+    info "Select timezone:"
+    TIMEZONE=$(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort | gum filter --height=15 --placeholder="Search timezone...")
+    TIMEZONE=${TIMEZONE:-UTC}
+
+    echo
+    success "Configuration summary:"
+    echo "  Hostname: $HOSTNAME"
+    echo "  Username: $USERNAME"
+    echo "  Timezone: $TIMEZONE"
+    echo
+
+    if ! gum confirm "Proceed with these settings?"; then
+        configure_user
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Partitioning
+# -----------------------------------------------------------------------------
+
+partition_disk() {
+    header
+    info "Partitioning $DISK..."
+    echo
+
+    gum spin --spinner dot --title "Wiping disk..." -- \
+        wipefs -af "$DISK"
+
+    gum spin --spinner dot --title "Creating partition table..." -- \
+        parted -s "$DISK" mklabel gpt
+
+    gum spin --spinner dot --title "Creating EFI partition (512MB)..." -- \
+        parted -s "$DISK" mkpart primary fat32 1MiB 513MiB
+
+    gum spin --spinner dot --title "Setting EFI flags..." -- \
+        parted -s "$DISK" set 1 esp on
+
+    gum spin --spinner dot --title "Creating root partition..." -- \
+        parted -s "$DISK" mkpart primary btrfs 513MiB 100%
+
+    sleep 1  # Wait for kernel to update partition table
+
+    # Determine partition names (handle nvme vs sd naming)
+    if [[ "$DISK" == *"nvme"* ]]; then
+        EFI_PART="${DISK}p1"
+        ROOT_PART="${DISK}p2"
+    else
+        EFI_PART="${DISK}1"
+        ROOT_PART="${DISK}2"
+    fi
+
+    success "Partitioning complete!"
+    echo
+    lsblk "$DISK"
+    sleep 2
+}
+
+# -----------------------------------------------------------------------------
+# Formatting
+# -----------------------------------------------------------------------------
+
+format_partitions() {
+    header
+    info "Formatting partitions..."
+    echo
+
+    gum spin --spinner dot --title "Formatting EFI partition (FAT32)..." -- \
+        mkfs.fat -F32 "$EFI_PART"
+
+    gum spin --spinner dot --title "Formatting root partition (BTRFS)..." -- \
+        mkfs.btrfs -f "$ROOT_PART"
+
+    success "Formatting complete!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
+# Mount Partitions
+# -----------------------------------------------------------------------------
+
+mount_partitions() {
+    header
+    info "Mounting partitions..."
+    echo
+
+    # Mount root
+    mount "$ROOT_PART" /mnt
+
+    # Create BTRFS subvolumes
+    gum spin --spinner dot --title "Creating BTRFS subvolumes..." -- bash -c '
+        btrfs subvolume create /mnt/@
+        btrfs subvolume create /mnt/@home
+        btrfs subvolume create /mnt/@snapshots
+        btrfs subvolume create /mnt/@var_log
+    '
+
+    # Unmount and remount with subvolumes
+    umount /mnt
+
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$ROOT_PART" /mnt
+
+    mkdir -p /mnt/{boot/efi,home,.snapshots,var/log}
+
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$ROOT_PART" /mnt/home
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$ROOT_PART" /mnt/.snapshots
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@var_log "$ROOT_PART" /mnt/var/log
+
+    mount "$EFI_PART" /mnt/boot/efi
+
+    success "Partitions mounted!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
+# Install Base System
+# -----------------------------------------------------------------------------
+
+install_base() {
+    header
+    info "Installing base system..."
+    echo
+
+    # Read packages from file
+    if [[ -f "$PACKAGES_FILE" ]]; then
+        mapfile -t packages < <(grep -v '^#' "$PACKAGES_FILE" | grep -v '^$')
+    else
+        # Fallback to essential packages if file not found
+        packages=(base linux linux-firmware grub efibootmgr networkmanager)
+        warn "Package list not found, installing minimal system..."
+    fi
+
+    info "Installing ${#packages[@]} packages..."
+    echo
+
+    # Install packages with pacstrap
+    pacstrap -K /mnt "${packages[@]}" 2>&1 | while read -r line; do
+        echo "$line"
+    done
+
+    success "Base system installed!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
+# Configure System
+# -----------------------------------------------------------------------------
+
+configure_system() {
+    header
+    info "Configuring system..."
+    echo
+
+    # Generate fstab
+    gum spin --spinner dot --title "Generating fstab..." -- \
+        bash -c 'genfstab -U /mnt >> /mnt/etc/fstab'
+
+    # Timezone
+    gum spin --spinner dot --title "Setting timezone..." -- \
+        arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+
+    arch-chroot /mnt hwclock --systohc
+
+    # Locale
+    gum spin --spinner dot --title "Configuring locale..." -- bash -c '
+        echo "en_US.UTF-8 UTF-8" >> /mnt/etc/locale.gen
+        arch-chroot /mnt locale-gen
+        echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+    '
+
+    # Hostname
+    gum spin --spinner dot --title "Setting hostname..." -- bash -c "
+        echo '$HOSTNAME' > /mnt/etc/hostname
+        cat > /mnt/etc/hosts << EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
+EOF
+    "
+
+    # Create user
+    gum spin --spinner dot --title "Creating user $USERNAME..." -- bash -c "
+        arch-chroot /mnt useradd -m -G wheel -s /bin/zsh '$USERNAME'
+        echo '$USERNAME:$PASSWORD' | arch-chroot /mnt chpasswd
+    "
+
+    # Enable sudo for wheel group
+    gum spin --spinner dot --title "Configuring sudo..." -- \
+        sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
+
+    # Install bootloader
+    gum spin --spinner dot --title "Installing GRUB bootloader..." -- bash -c '
+        arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+        arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+    '
+
+    # Enable services
+    gum spin --spinner dot --title "Enabling services..." -- bash -c '
+        arch-chroot /mnt systemctl enable NetworkManager
+        arch-chroot /mnt systemctl enable sddm
+    '
+
+    success "System configured!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
+# Finish Installation
+# -----------------------------------------------------------------------------
+
+finish() {
+    header
+
+    gum style \
+        --border rounded \
+        --border-foreground="#a6e3a1" \
+        --padding "1 2" \
+        --margin "1" \
+        --align center \
+        "✨ Installation Complete! ✨"
+
+    echo
+    gum style \
+        --padding "0 2" \
+        "Your new Hyprland system is ready!" \
+        "" \
+        "Next steps:" \
+        "  1. Reboot into your new system" \
+        "  2. Log in with username: $USERNAME" \
+        "  3. Hyprland will start automatically via SDDM" \
+        "" \
+        "Useful keybinds (defaults):" \
+        "  SUPER + Enter    → Open terminal (Ghostty)" \
+        "  SUPER + D        → Application launcher (Rofi)" \
+        "  SUPER + Q        → Close window" \
+        "  SUPER + 1-9      → Switch workspace"
+
+    echo
+    if gum confirm "Reboot now?"; then
+        umount -R /mnt
+        reboot
+    else
+        info "You can reboot manually when ready."
+        info "Run 'umount -R /mnt' before rebooting."
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
+main() {
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        die "This script must be run as root!"
+    fi
+
+    # Check for required tools
+    if ! command -v gum &>/dev/null; then
+        die "gum is not installed!"
+    fi
+
+    welcome
+    select_disk
+    configure_user
+    partition_disk
+    format_partitions
+    mount_partitions
+    install_base
+    configure_system
+    finish
+}
+
+main "$@"
