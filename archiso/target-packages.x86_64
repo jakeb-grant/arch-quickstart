@@ -32,7 +32,7 @@ intel-ucode
 hyprland
 sddm
 waybar
-rofi-wayland
+# walker (AUR) - installed by installer script
 
 # Wayland support
 xdg-desktop-portal-hyprland
