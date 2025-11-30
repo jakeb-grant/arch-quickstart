@@ -2,8 +2,14 @@
 # ==============================================================================
 # AMD GPU Setup Script for Arch Linux
 # ==============================================================================
-# Installs AMD GPU drivers and Vulkan support.
-# AMD GPUs use the open-source AMDGPU/Mesa stack by default.
+# Installs AMD GPU drivers and Vulkan support for Hyprland.
+# AMD GPUs use the open-source AMDGPU/Mesa stack.
+#
+# This script is for:
+# - Standalone AMD discrete GPUs (RX series, etc.)
+# - AMD APUs (Ryzen with integrated Radeon)
+#
+# If you have AMD iGPU + NVIDIA dGPU, use nvidia-setup instead!
 #
 # ==============================================================================
 
@@ -13,26 +19,83 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 
-# --- GPU Detection ---
-AMD_GPU=$(lspci | grep -iE 'vga|3d|display' | grep -iE 'amd|radeon|ati' || true)
+# ==============================================================================
+# GPU Detection
+# ==============================================================================
+header "Detecting Graphics Hardware"
 
-if [ -z "$AMD_GPU" ]; then
-    error "No AMD GPU detected. This script is only for AMD hardware."
+# Get all GPU info
+ALL_GPUS=$(lspci | grep -iE 'vga|3d|display' || true)
+
+# Detect GPUs
+AMD_GPU=$(echo "$ALL_GPUS" | grep -iE 'amd|radeon|ati' | head -1 || true)
+NVIDIA_GPU=$(echo "$ALL_GPUS" | grep -i 'nvidia' | head -1 || true)
+INTEL_GPU=$(echo "$ALL_GPUS" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe)' | head -1 || true)
+
+# --- Check for hybrid setup with NVIDIA ---
+if [ -n "$NVIDIA_GPU" ]; then
+    echo ""
+    warn "NVIDIA GPU detected alongside AMD!"
+    echo ""
+    echo "Detected GPUs:"
+    echo "  AMD:    $AMD_GPU"
+    echo "  NVIDIA: $NVIDIA_GPU"
+    echo ""
+    warn "For AMD iGPU + NVIDIA dGPU (hybrid graphics):"
+    warn "  Run 'nvidia-setup' instead - it handles hybrid configurations."
+    echo ""
+    warn "This script (amd-setup) is only for standalone AMD systems."
+    echo ""
+    read -p "Continue with AMD-only setup anyway? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Run 'nvidia-setup' for hybrid graphics configuration."
+        exit 0
+    fi
 fi
 
-info "AMD GPU detected:"
-echo "$AMD_GPU"
-echo
+# --- Validate AMD GPU exists ---
+if [ -z "$AMD_GPU" ]; then
+    echo ""
+    warn "No AMD GPU detected!"
+    echo ""
+    echo "Detected GPUs:"
+    echo "$ALL_GPUS" | sed 's/^/  /'
+    echo ""
 
-# Determine GPU generation for driver selection
-# GCN 1-4 (HD 7000+, R5/R7/R9, RX 400/500) and newer use AMDGPU
-# Older (HD 6000 and below) use radeon driver (usually works out of box)
+    if [ -n "$NVIDIA_GPU" ]; then
+        info "NVIDIA GPU detected. Run 'nvidia-setup' instead."
+    elif [ -n "$INTEL_GPU" ]; then
+        info "Intel GPU detected. Run 'intel-setup' instead."
+    fi
+    exit 1
+fi
+
+# --- Display detected hardware ---
+info "AMD GPU detected:"
+echo "  $AMD_GPU"
+
+# Determine GPU type
+GPU_TYPE="discrete"
+if echo "$AMD_GPU" | grep -qiE 'Radeon Graphics$|Ryzen.*Radeon|Renoir|Cezanne|Barcelo|Phoenix|Rembrandt|Lucienne|Mendocino'; then
+    GPU_TYPE="integrated"
+    info "This appears to be an AMD APU (integrated graphics)"
+else
+    info "This appears to be an AMD discrete GPU"
+fi
+
+# ==============================================================================
+# Package Selection
+# ==============================================================================
+header "Selecting Packages"
 
 PACKAGES=(
     # Core Mesa drivers (OpenGL)
@@ -53,53 +116,98 @@ PACKAGES=(
 
     # Vulkan utilities
     "vulkan-tools"
+
+    # Wayland support
+    "qt5-wayland"
+    "qt6-wayland"
 )
 
-info "The following packages will be installed:"
+echo "Packages to install:"
 for pkg in "${PACKAGES[@]}"; do
     echo "  - $pkg"
 done
-echo
+echo ""
 
-read -p "Continue? [Y/n] " -n 1 -r
+# ==============================================================================
+# Confirmation
+# ==============================================================================
+read -p "Continue with installation? [Y/n] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo "Aborted."
     exit 0
 fi
 
-# Install packages
+# ==============================================================================
+# Package Installation
+# ==============================================================================
+header "Installing Packages"
+
+info "Updating package database..."
+sudo pacman -Syu --noconfirm
+
 info "Installing AMD GPU packages..."
 sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"
 
-# Optional: Install ROCm for compute workloads
-echo
+# ==============================================================================
+# ROCm (Optional)
+# ==============================================================================
+echo ""
 read -p "Install ROCm for GPU compute (OpenCL, HIP)? [y/N] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
+    header "Installing ROCm"
     info "Installing ROCm packages..."
     sudo pacman -S --needed --noconfirm rocm-opencl-runtime rocm-hip-runtime
 fi
 
-# Add environment variables for Hyprland
+# ==============================================================================
+# Hyprland Configuration
+# ==============================================================================
+header "Configuring Hyprland Environment"
+
 HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
 if [ -f "$HYPRLAND_CONF" ]; then
-    # Check if AMD vars already exist
-    if ! grep -q "AMD environment" "$HYPRLAND_CONF"; then
+    if grep -q "AMD environment" "$HYPRLAND_CONF"; then
+        warn "AMD environment variables already present in hyprland.conf"
+    else
         info "Adding AMD environment variables to hyprland.conf..."
         cat >>"$HYPRLAND_CONF" <<'EOF'
 
+# ==============================================================================
 # AMD environment variables
+# ==============================================================================
 env = LIBVA_DRIVER_NAME,radeonsi
+
+# Electron/Chromium native Wayland support
+env = ELECTRON_OZONE_PLATFORM_HINT,auto
 EOF
-    else
-        info "AMD environment variables already configured in hyprland.conf"
+        info "Environment variables added"
     fi
+else
+    warn "Hyprland config not found at $HYPRLAND_CONF"
+    warn "Add these environment variables manually:"
+    echo ""
+    echo "  env = LIBVA_DRIVER_NAME,radeonsi"
+    echo "  env = ELECTRON_OZONE_PLATFORM_HINT,auto"
 fi
 
-echo
+# ==============================================================================
+# Completion
+# ==============================================================================
+header "Setup Complete"
+
 info "AMD GPU setup complete!"
-info "You can verify with:"
-echo "  vulkaninfo --summary    - Check Vulkan support"
-echo "  vainfo                  - Check VA-API support"
-echo "  glxinfo | grep renderer - Check OpenGL renderer"
+echo ""
+echo "Verification commands:"
+echo "  vulkaninfo --summary      - Check Vulkan support"
+echo "  vainfo                    - Check VA-API (video acceleration)"
+echo "  glxinfo | grep renderer   - Check OpenGL renderer"
+echo ""
+
+if [ "$GPU_TYPE" = "integrated" ]; then
+    echo "APU Notes:"
+    echo "  - Your AMD APU handles all graphics"
+    echo "  - No discrete GPU switching needed"
+    echo "  - Power efficient for laptop use"
+fi

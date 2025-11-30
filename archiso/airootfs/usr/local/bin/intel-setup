@@ -2,7 +2,13 @@
 # ==============================================================================
 # Intel GPU Setup Script for Arch Linux
 # ==============================================================================
-# This script installs hardware video acceleration for Intel GPUs.
+# Installs Intel GPU drivers and hardware video acceleration for Hyprland.
+#
+# This script is for:
+# - Standalone Intel integrated graphics
+# - Intel Arc discrete GPUs
+#
+# If you have Intel iGPU + NVIDIA dGPU, use nvidia-setup instead!
 #
 # ==============================================================================
 
@@ -12,60 +18,231 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 
-# --- GPU Detection ---
-INTEL_GPU=$(lspci | grep -iE 'vga|3d|display' | grep -i 'intel' || true)
+# ==============================================================================
+# GPU Detection
+# ==============================================================================
+header "Detecting Graphics Hardware"
 
+# Get all GPU info
+ALL_GPUS=$(lspci | grep -iE 'vga|3d|display' || true)
+
+# Detect GPUs
+INTEL_GPU=$(echo "$ALL_GPUS" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe|arc)' | head -1 || true)
+NVIDIA_GPU=$(echo "$ALL_GPUS" | grep -i 'nvidia' | head -1 || true)
+AMD_GPU=$(echo "$ALL_GPUS" | grep -iE 'amd|radeon|ati' | head -1 || true)
+
+# --- Check for hybrid setup with NVIDIA ---
+if [ -n "$NVIDIA_GPU" ]; then
+    echo ""
+    warn "NVIDIA GPU detected alongside Intel!"
+    echo ""
+    echo "Detected GPUs:"
+    echo "  Intel:  $INTEL_GPU"
+    echo "  NVIDIA: $NVIDIA_GPU"
+    echo ""
+    warn "For Intel iGPU + NVIDIA dGPU (hybrid graphics):"
+    warn "  Run 'nvidia-setup' instead - it handles hybrid configurations."
+    echo ""
+    warn "This script (intel-setup) is only for standalone Intel systems."
+    echo ""
+    read -p "Continue with Intel-only setup anyway? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        info "Run 'nvidia-setup' for hybrid graphics configuration."
+        exit 0
+    fi
+fi
+
+# --- Validate Intel GPU exists ---
 if [ -z "$INTEL_GPU" ]; then
-    error "No Intel GPU detected. This script is only for Intel hardware."
+    echo ""
+    warn "No Intel GPU detected!"
+    echo ""
+    echo "Detected GPUs:"
+    echo "$ALL_GPUS" | sed 's/^/  /'
+    echo ""
+
+    if [ -n "$NVIDIA_GPU" ]; then
+        info "NVIDIA GPU detected. Run 'nvidia-setup' instead."
+    elif [ -n "$AMD_GPU" ]; then
+        info "AMD GPU detected. Run 'amd-setup' instead."
+    fi
+    exit 1
 fi
 
+# --- Display detected hardware ---
 info "Intel GPU detected:"
-echo "$INTEL_GPU"
-echo
+echo "  $INTEL_GPU"
 
-# Determine which driver to use
-DRIVER_PACKAGE=""
-DRIVER_NAME=""
+# ==============================================================================
+# Driver Selection
+# ==============================================================================
+header "Selecting Driver Package"
 
-if [[ "${INTEL_GPU,,}" =~ "hd graphics"|"uhd"|"xe"|"iris" ]]; then
-    # HD Graphics (Broadwell 2014+), UHD, Xe, and Iris use intel-media-driver
-    DRIVER_PACKAGE="intel-media-driver"
-    DRIVER_NAME="intel-media-driver (VA-API for Broadwell+)"
-elif [[ "${INTEL_GPU,,}" =~ "gma" ]]; then
-    # Older GMA generations (2008-2014) use libva-intel-driver
-    DRIVER_PACKAGE="libva-intel-driver"
-    DRIVER_NAME="libva-intel-driver (VA-API for older Intel)"
+# Determine which VA-API driver to use based on GPU generation
+#
+# intel-media-driver: For Broadwell (2014+) and newer
+#   - HD Graphics 5xxx, 6xxx
+#   - UHD Graphics 6xx, 7xx
+#   - Iris Xe
+#   - Arc GPUs
+#
+# libva-intel-driver: For older Intel GPUs
+#   - GMA series
+#   - HD Graphics 2xxx, 3xxx, 4xxx
+
+VAAPI_DRIVER=""
+DRIVER_REASON=""
+
+# Check for Arc (discrete)
+if echo "$INTEL_GPU" | grep -qiE 'arc'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel Arc discrete GPU"
+    GPU_TYPE="discrete"
+# Check for Xe graphics
+elif echo "$INTEL_GPU" | grep -qiE 'xe|iris'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel Xe/Iris graphics (Gen 11+)"
+    GPU_TYPE="integrated"
+# Check for UHD graphics
+elif echo "$INTEL_GPU" | grep -qiE 'uhd'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel UHD Graphics (Gen 9+)"
+    GPU_TYPE="integrated"
+# Check for HD 5xxx/6xxx (Broadwell+)
+elif echo "$INTEL_GPU" | grep -qiE 'hd graphics [56][0-9][0-9]'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel HD Graphics 5xxx/6xxx (Broadwell+)"
+    GPU_TYPE="integrated"
+# Check for older HD graphics
+elif echo "$INTEL_GPU" | grep -qiE 'hd graphics [234][0-9][0-9]|hd graphics [0-9][0-9][0-9]'; then
+    VAAPI_DRIVER="libva-intel-driver"
+    DRIVER_REASON="Intel HD Graphics (older generation)"
+    GPU_TYPE="integrated"
+# Check for GMA (very old)
+elif echo "$INTEL_GPU" | grep -qiE 'gma'; then
+    VAAPI_DRIVER="libva-intel-driver"
+    DRIVER_REASON="Intel GMA (legacy)"
+    GPU_TYPE="integrated"
 else
-    # Default to intel-media-driver for unknown but detected Intel GPUs
-    DRIVER_PACKAGE="intel-media-driver"
-    DRIVER_NAME="intel-media-driver (default for modern Intel)"
+    # Default to modern driver for unrecognized Intel GPUs
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel GPU (defaulting to modern driver)"
+    GPU_TYPE="integrated"
 fi
 
-info "Selected driver: $DRIVER_NAME"
-echo
+info "Selected VA-API driver: $VAAPI_DRIVER"
+info "Reason: $DRIVER_REASON"
 
-# Confirm before proceeding
-read -p "Install $DRIVER_PACKAGE? [Y/n] " -n 1 -r
+# ==============================================================================
+# Package Selection
+# ==============================================================================
+header "Selecting Packages"
+
+PACKAGES=(
+    # Core Mesa drivers (OpenGL/Vulkan)
+    "mesa"
+    "lib32-mesa"
+
+    # Vulkan support
+    "vulkan-intel"
+    "lib32-vulkan-intel"
+
+    # VA-API hardware video acceleration
+    "$VAAPI_DRIVER"
+    "libva-utils"
+
+    # Wayland support
+    "qt5-wayland"
+    "qt6-wayland"
+)
+
+# Add Intel compute runtime for Arc GPUs
+if [ "$GPU_TYPE" = "discrete" ]; then
+    PACKAGES+=("intel-compute-runtime")
+fi
+
+echo "Packages to install:"
+for pkg in "${PACKAGES[@]}"; do
+    echo "  - $pkg"
+done
+echo ""
+
+# ==============================================================================
+# Confirmation
+# ==============================================================================
+read -p "Continue with installation? [Y/n] " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo "Aborted."
     exit 0
 fi
 
-# Install the driver
-info "Installing $DRIVER_PACKAGE..."
-sudo pacman -S --needed --noconfirm "$DRIVER_PACKAGE"
+# ==============================================================================
+# Package Installation
+# ==============================================================================
+header "Installing Packages"
 
-# Install additional useful packages
-info "Installing additional VA-API tools..."
-sudo pacman -S --needed --noconfirm libva-utils
+info "Updating package database..."
+sudo pacman -Syu --noconfirm
 
-echo
+info "Installing Intel GPU packages..."
+sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"
+
+# ==============================================================================
+# Hyprland Configuration
+# ==============================================================================
+header "Configuring Hyprland Environment"
+
+HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
+if [ -f "$HYPRLAND_CONF" ]; then
+    if grep -q "Intel environment" "$HYPRLAND_CONF"; then
+        warn "Intel environment variables already present in hyprland.conf"
+    else
+        info "Adding Intel environment variables to hyprland.conf..."
+        cat >>"$HYPRLAND_CONF" <<'EOF'
+
+# ==============================================================================
+# Intel environment variables
+# ==============================================================================
+env = LIBVA_DRIVER_NAME,iHD
+
+# Electron/Chromium native Wayland support
+env = ELECTRON_OZONE_PLATFORM_HINT,auto
+EOF
+        info "Environment variables added"
+    fi
+else
+    warn "Hyprland config not found at $HYPRLAND_CONF"
+    warn "Add these environment variables manually:"
+    echo ""
+    echo "  env = LIBVA_DRIVER_NAME,iHD"
+    echo "  env = ELECTRON_OZONE_PLATFORM_HINT,auto"
+fi
+
+# ==============================================================================
+# Completion
+# ==============================================================================
+header "Setup Complete"
+
 info "Intel GPU setup complete!"
-info "You can verify hardware acceleration with: vainfo"
+echo ""
+echo "Verification commands:"
+echo "  vainfo                    - Check VA-API (video acceleration)"
+echo "  glxinfo | grep renderer   - Check OpenGL renderer"
+echo "  vulkaninfo --summary      - Check Vulkan support"
+echo ""
+
+if [ "$GPU_TYPE" = "discrete" ]; then
+    echo "Arc GPU Notes:"
+    echo "  - Intel Arc is a discrete GPU with full compute support"
+    echo "  - OpenCL workloads are supported via intel-compute-runtime"
+fi
