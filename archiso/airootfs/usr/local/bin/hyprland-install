@@ -65,7 +65,7 @@ welcome() {
         "This will install a clean Arch Linux system with:" \
         "  • Hyprland compositor" \
         "  • SDDM display manager" \
-        "  • Waybar, Rofi, Ghostty" \
+        "  • Waybar, Walker, Ghostty" \
         "  • Firefox, Nautilus" \
         "  • Pipewire audio" \
         "" \
@@ -378,6 +378,49 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# Install AUR Packages
+# -----------------------------------------------------------------------------
+
+install_aur_packages() {
+    header
+    info "Installing AUR packages (Walker launcher)..."
+    echo
+
+    # Create a script to run as the user for AUR installation
+    cat > /mnt/tmp/install-aur.sh << 'AURSCRIPT'
+#!/bin/bash
+set -e
+
+cd /tmp
+
+# Install yay
+if ! command -v yay &>/dev/null; then
+    git clone https://aur.archlinux.org/yay-bin.git
+    cd yay-bin
+    makepkg -si --noconfirm
+    cd ..
+    rm -rf yay-bin
+fi
+
+# Install walker and elephant
+yay -S --noconfirm walker-bin elephant
+AURSCRIPT
+
+    chmod +x /mnt/tmp/install-aur.sh
+
+    info "Building and installing yay (AUR helper)..."
+    arch-chroot /mnt sudo -u "$USERNAME" /tmp/install-aur.sh 2>&1 | while read -r line; do
+        echo "$line"
+    done
+
+    # Cleanup
+    rm -f /mnt/tmp/install-aur.sh
+
+    success "AUR packages installed!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
 # Finish Installation
 # -----------------------------------------------------------------------------
 
@@ -404,7 +447,7 @@ finish() {
         "" \
         "Useful keybinds (defaults):" \
         "  SUPER + Enter    → Open terminal (Ghostty)" \
-        "  SUPER + D        → Application launcher (Rofi)" \
+        "  SUPER + D        → Application launcher (Walker)" \
         "  SUPER + Q        → Close window" \
         "  SUPER + 1-9      → Switch workspace"
 
@@ -441,6 +484,7 @@ main() {
     mount_partitions
     install_base
     configure_system
+    install_aur_packages
     finish
 }
 
