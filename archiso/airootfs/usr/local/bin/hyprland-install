@@ -326,6 +326,10 @@ install_base() {
     info "Installing base system..."
     echo
 
+    # Sync package databases first
+    info "Syncing package databases..."
+    pacman -Sy
+
     # Read packages from file
     if [[ -f "$PACKAGES_FILE" ]]; then
         mapfile -t packages < <(grep -v '^#' "$PACKAGES_FILE" | grep -v '^$')
