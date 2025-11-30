@@ -579,6 +579,9 @@ EOF
         # Configure GRUB for encrypted root
         sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot\"|" /mnt/etc/default/grub
 
+        # Enable GRUB cryptodisk support
+        echo "GRUB_ENABLE_CRYPTODISK=y" >> /mnt/etc/default/grub
+
         # Regenerate initramfs
         info "  Regenerating initramfs..."
         arch-chroot /mnt mkinitcpio -P
