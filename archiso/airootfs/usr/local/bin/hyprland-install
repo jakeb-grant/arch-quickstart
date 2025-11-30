@@ -16,6 +16,21 @@ export GUM_SPIN_SPINNER_FOREGROUND="#89b4fa"
 
 # Package list location
 PACKAGES_FILE="/root/target-packages.x86_64"
+CONFIG_FILE="/root/install.conf"
+
+# Load configuration defaults
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
+# Fallback defaults if config not found
+DEFAULT_USERNAME="${DEFAULT_USERNAME:-user}"
+DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-America/Denver}"
+DEFAULT_LOCALE="${DEFAULT_LOCALE:-en_US.UTF-8}"
+DEFAULT_KEYMAP="${DEFAULT_KEYMAP:-us}"
+DEFAULT_SHELL="${DEFAULT_SHELL:-/bin/zsh}"
+GIT_USER_NAME="${GIT_USER_NAME:-}"
+GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -134,19 +149,24 @@ select_disk() {
 
 configure_user() {
     header
-    gum style --foreground="#cba6f7" "Configure your user account:"
+    gum style --foreground="#cba6f7" "Configure your system:"
     echo
 
-    # Hostname
-    info "Enter hostname:"
-    HOSTNAME=$(gum input --placeholder "archlinux" --value "archlinux")
+    # Hostname - select from predefined options
+    info "Select machine type:"
+    if [[ ${#DEFAULT_HOSTNAME_OPTIONS[@]} -gt 0 ]]; then
+        HOSTNAME=$(printf '%s\n' "${DEFAULT_HOSTNAME_OPTIONS[@]}" | gum choose)
+    else
+        HOSTNAME=$(gum input --placeholder "archlinux" --value "archlinux")
+    fi
     HOSTNAME=${HOSTNAME:-archlinux}
 
     echo
 
-    # Username
+    # Username - pre-filled with default
     info "Enter username:"
-    USERNAME=$(gum input --placeholder "user")
+    USERNAME=$(gum input --placeholder "$DEFAULT_USERNAME" --value "$DEFAULT_USERNAME")
+    USERNAME=${USERNAME:-$DEFAULT_USERNAME}
 
     if [[ -z "$USERNAME" ]]; then
         die "Username cannot be empty!"
@@ -154,7 +174,7 @@ configure_user() {
 
     echo
 
-    # Password
+    # Password - must be entered
     info "Enter password for $USERNAME:"
     PASSWORD=$(gum input --password --placeholder "Password")
 
@@ -171,16 +191,25 @@ configure_user() {
 
     echo
 
-    # Timezone selection
-    info "Select timezone:"
-    TIMEZONE=$(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort | gum filter --height=15 --placeholder="Search timezone...")
-    TIMEZONE=${TIMEZONE:-UTC}
+    # Timezone - pre-filled with default, option to change
+    info "Timezone (default: $DEFAULT_TIMEZONE):"
+    if gum confirm "Use default timezone ($DEFAULT_TIMEZONE)?"; then
+        TIMEZONE="$DEFAULT_TIMEZONE"
+    else
+        TIMEZONE=$(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort | gum filter --height=15 --placeholder="Search timezone..." --value="America/")
+        TIMEZONE=${TIMEZONE:-$DEFAULT_TIMEZONE}
+    fi
 
     echo
     success "Configuration summary:"
-    echo "  Hostname: $HOSTNAME"
+    echo "  Machine:  $HOSTNAME"
     echo "  Username: $USERNAME"
     echo "  Timezone: $TIMEZONE"
+    echo "  Locale:   $DEFAULT_LOCALE"
+    echo "  Keymap:   $DEFAULT_KEYMAP"
+    if [[ -n "$GIT_USER_NAME" ]]; then
+        echo "  Git user: $GIT_USER_NAME <$GIT_USER_EMAIL>"
+    fi
     echo
 
     if ! gum confirm "Proceed with these settings?"; then
@@ -335,11 +364,16 @@ configure_system() {
     arch-chroot /mnt hwclock --systohc
 
     # Locale
-    gum spin --spinner dot --title "Configuring locale..." -- bash -c '
-        echo "en_US.UTF-8 UTF-8" >> /mnt/etc/locale.gen
+    gum spin --spinner dot --title "Configuring locale..." -- bash -c "
+        echo '$DEFAULT_LOCALE UTF-8' >> /mnt/etc/locale.gen
         arch-chroot /mnt locale-gen
-        echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
-    '
+        echo 'LANG=$DEFAULT_LOCALE' > /mnt/etc/locale.conf
+    "
+
+    # Keyboard/Console
+    gum spin --spinner dot --title "Configuring keyboard..." -- bash -c "
+        echo 'KEYMAP=$DEFAULT_KEYMAP' > /mnt/etc/vconsole.conf
+    "
 
     # Hostname
     gum spin --spinner dot --title "Setting hostname..." -- bash -c "
@@ -353,9 +387,18 @@ EOF
 
     # Create user
     gum spin --spinner dot --title "Creating user $USERNAME..." -- bash -c "
-        arch-chroot /mnt useradd -m -G wheel -s /bin/zsh '$USERNAME'
+        arch-chroot /mnt useradd -m -G wheel -s '$DEFAULT_SHELL' '$USERNAME'
         echo '$USERNAME:$PASSWORD' | arch-chroot /mnt chpasswd
     "
+
+    # Configure git for user
+    if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
+        gum spin --spinner dot --title "Configuring git..." -- bash -c "
+            arch-chroot /mnt sudo -u '$USERNAME' git config --global user.name '$GIT_USER_NAME'
+            arch-chroot /mnt sudo -u '$USERNAME' git config --global user.email '$GIT_USER_EMAIL'
+            arch-chroot /mnt sudo -u '$USERNAME' git config --global init.defaultBranch main
+        "
+    fi
 
     # Enable sudo for wheel group
     gum spin --spinner dot --title "Configuring sudo..." -- \
