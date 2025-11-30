@@ -31,4 +31,9 @@ file_permissions=(
   ["/usr/local/bin/hyprland-install"]="0:0:755"
   ["/usr/local/bin/nvidia-setup"]="0:0:755"
   ["/usr/local/bin/intel-setup"]="0:0:755"
+  ["/usr/local/bin/amd-setup"]="0:0:755"
+  ["/usr/local/bin/bluetooth-setup"]="0:0:755"
+  ["/usr/local/bin/printer-setup"]="0:0:755"
+  ["/usr/local/bin/firewall-setup"]="0:0:755"
+  ["/usr/local/bin/dotfiles-setup"]="0:0:755"
 )
