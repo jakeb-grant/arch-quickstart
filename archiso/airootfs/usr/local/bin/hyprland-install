@@ -70,6 +70,91 @@ header() {
 }
 
 # -----------------------------------------------------------------------------
+# Network Check
+# -----------------------------------------------------------------------------
+
+check_network() {
+    header
+    info "Checking network connectivity..."
+    echo
+
+    # Test internet connectivity
+    if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        success "Network connected!"
+        sleep 1
+        return 0
+    fi
+
+    warn "No internet connection detected."
+    echo
+
+    # Check if WiFi interfaces exist
+    if [[ -d /sys/class/net ]] && ls /sys/class/net | grep -qE '^wl'; then
+        if gum confirm "Would you like to connect to WiFi?"; then
+            connect_wifi
+        else
+            die "Internet connection required for installation."
+        fi
+    else
+        die "No network connection. Please connect via ethernet and restart."
+    fi
+}
+
+connect_wifi() {
+    header
+    info "Scanning for WiFi networks..."
+    echo
+
+    # Make sure NetworkManager is running
+    systemctl start NetworkManager 2>/dev/null || true
+    sleep 2
+
+    # Get list of WiFi networks
+    local networks
+    networks=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -v '^$' | sort -u)
+
+    if [[ -z "$networks" ]]; then
+        warn "No WiFi networks found. Rescanning..."
+        nmcli dev wifi rescan 2>/dev/null || true
+        sleep 3
+        networks=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -v '^$' | sort -u)
+    fi
+
+    if [[ -z "$networks" ]]; then
+        die "No WiFi networks found!"
+    fi
+
+    info "Select WiFi network:"
+    local ssid
+    ssid=$(echo "$networks" | gum choose --height=15)
+
+    if [[ -z "$ssid" ]]; then
+        die "No network selected!"
+    fi
+
+    info "Enter password for '$ssid':"
+    local wifi_password
+    wifi_password=$(gum input --password --placeholder "WiFi password")
+
+    info "Connecting to '$ssid'..."
+    if nmcli dev wifi connect "$ssid" password "$wifi_password" 2>&1; then
+        sleep 2
+        if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+            success "Connected to WiFi!"
+            sleep 1
+            return 0
+        fi
+    fi
+
+    warn "Failed to connect. Try again?"
+    if gum confirm; then
+        connect_wifi
+    else
+        die "Internet connection required for installation."
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Welcome Screen
 # -----------------------------------------------------------------------------
 
@@ -202,6 +287,16 @@ configure_user() {
         TIMEZONE=$(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort | gum filter --height=15 --placeholder="Search timezone..." --value="America/")
         TIMEZONE=${TIMEZONE:-$DEFAULT_TIMEZONE}
     fi
+
+    echo
+
+    # Git configuration - pre-filled with defaults, editable
+    info "Git configuration:"
+    info "  Git username:"
+    GIT_USER_NAME=$(gum input --placeholder "Git username" --value "$GIT_USER_NAME")
+
+    info "  Git email:"
+    GIT_USER_EMAIL=$(gum input --placeholder "Git email" --value "$GIT_USER_EMAIL")
 
     echo
     success "Configuration summary:"
@@ -557,6 +652,7 @@ main() {
     partition_disk
     format_partitions
     mount_partitions
+    check_network
     install_base
     configure_system
     install_aur_packages
