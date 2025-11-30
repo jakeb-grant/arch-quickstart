@@ -1,111 +1,187 @@
-# Custom Arch Linux ISO Builder
+# Hyprland Arch Linux ISO
 
-This repository contains the configuration for building a custom Arch Linux ISO using [archiso](https://wiki.archlinux.org/title/Archiso).
+A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop environment.
 
-## Features
+## What's Included
 
-- Automated ISO builds via GitHub Actions
-- Both BIOS and UEFI boot support
-- Pre-configured with essential system tools
-- NetworkManager for easy network configuration
-- SSH server enabled for remote access
-- archinstall for guided installation
+**Desktop Environment:**
+- Hyprland (Wayland compositor)
+- SDDM (display manager)
+- Waybar (status bar)
+- Walker (application launcher, via AUR)
+- Ghostty (terminal)
+
+**Applications:**
+- Firefox, Nautilus, Zed editor
+- PipeWire audio stack
+- NetworkManager
+
+**Fonts:** JetBrains Mono Nerd, Noto fonts
+
+## Installation Flow
+
+### 1. Boot the ISO
+
+Boot from USB and you'll auto-login to a root shell. You'll see:
+
+```
+================================================================================
+       Hyprland Arch Linux Live Environment
+================================================================================
+
+ To install the Hyprland desktop system, run:
+
+   hyprland-install
+================================================================================
+```
+
+### 2. Run the Installer
+
+```bash
+hyprland-install
+```
+
+The TUI installer guides you through:
+
+#### Disk Selection
+- Lists all available disks (NVMe, SATA, etc.)
+- Requires double confirmation before wiping
+
+#### System Configuration
+- **Machine type**: Select `laptop` or `desktop`
+- **Username**: Pre-filled with `jacob` (configurable)
+- **Password**: Enter and confirm
+- **Timezone**: Defaults to `America/Denver`
+
+#### What Gets Created
+
+**Partitions (GPT):**
+| Partition | Size | Format | Mount |
+|-----------|------|--------|-------|
+| EFI | 512MB | FAT32 | `/boot/efi` |
+| Root | Remaining | BTRFS | `/` |
+
+**BTRFS Subvolumes:**
+| Subvolume | Mount Point | Purpose |
+|-----------|-------------|---------|
+| `@` | `/` | Root filesystem |
+| `@home` | `/home` | User data |
+| `@snapshots` | `/.snapshots` | Snapshot storage |
+| `@var_log` | `/var/log` | Log files |
+
+Mount options: `noatime,compress=zstd,space_cache=v2`
+
+#### Packages Installed
+~70 packages including the full Hyprland desktop, plus AUR packages (walker, elephant) via yay.
+
+#### System Configuration Applied
+- Locale: `en_US.UTF-8`
+- Keymap: `us`
+- Shell: `zsh`
+- Git configured with name/email
+- GRUB bootloader (UEFI)
+- Services enabled: NetworkManager, SDDM
+
+### 3. First Boot
+
+After reboot:
+1. SDDM login screen appears
+2. Log in with your username/password
+3. Hyprland starts automatically
+
+### 4. Post-Install Setup (Optional)
+
+Run these scripts as needed after first boot:
+
+#### GPU Drivers
+```bash
+nvidia-setup    # NVIDIA (auto-detects driver, configures Hyprland)
+intel-setup     # Intel (VA-API acceleration)
+amd-setup       # AMD (Mesa, Vulkan, VA-API)
+```
+
+#### System Features
+```bash
+bluetooth-setup   # Bluetooth + Blueman GUI
+printer-setup     # CUPS + drivers
+firewall-setup    # UFW with interactive rules
+dotfiles-setup    # Clone your dotfiles repo
+```
+
+## Default Keybinds (Hyprland)
+
+| Keybind | Action |
+|---------|--------|
+| `SUPER + Enter` | Open terminal (Ghostty) |
+| `SUPER + D` | Application launcher (Walker) |
+| `SUPER + Q` | Close window |
+| `SUPER + 1-9` | Switch workspace |
 
 ## Building the ISO
 
-### Automatic (GitHub Actions)
+### GitHub Actions (Automatic)
 
-1. Push changes to the `main` branch or `claude/*` branches
-2. The workflow triggers automatically when files in `archiso/` change
-3. Download the built ISO from the workflow artifacts
+Push to `main` or `claude/*` branches to trigger a build. Download the ISO from workflow artifacts.
 
-You can also manually trigger a build:
-1. Go to **Actions** → **Build Arch Linux ISO**
-2. Click **Run workflow**
-3. Optionally specify a custom ISO name
-
-### Manual (Local Build)
+### Local Build
 
 ```bash
-# Install dependencies (on Arch Linux)
+# Install dependencies
 sudo pacman -S archiso
 
-# Build the ISO
+# Build
 cd archiso
 sudo mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
-
-# The ISO will be in /tmp/archiso-out/
 ```
+
+## Configuration Files
+
+### `install.conf` - Installation Defaults
+
+```bash
+DEFAULT_USERNAME="jacob"
+DEFAULT_HOSTNAME_OPTIONS=("laptop" "desktop")
+GIT_USER_NAME="jacob"
+GIT_USER_EMAIL="86214494+jakeb-grant@users.noreply.github.com"
+DEFAULT_TIMEZONE="America/Denver"
+DEFAULT_LOCALE="en_US.UTF-8"
+DEFAULT_KEYMAP="us"
+```
+
+### `target-packages.x86_64` - Installed System Packages
+
+Packages installed on the target system (the full Hyprland desktop).
+
+### `packages.x86_64` - Live ISO Packages
+
+Packages included in the live environment (for installation/rescue).
 
 ## Directory Structure
 
 ```
 archiso/
-├── profiledef.sh         # Main profile configuration
-├── packages.x86_64       # Packages to install in the ISO
-├── pacman.conf           # Pacman configuration for build
-├── airootfs/             # Root filesystem customizations
-│   ├── etc/              # System configuration files
-│   │   ├── hostname
-│   │   ├── locale.conf
-│   │   ├── mkinitcpio.conf
-│   │   └── systemd/      # Systemd services and presets
-│   ├── root/             # Root user home directory
-│   └── usr/local/bin/    # Custom scripts
-├── efiboot/              # EFI boot configuration
-├── grub/                 # GRUB bootloader config
-└── syslinux/             # Syslinux (BIOS) bootloader config
+├── profiledef.sh              # ISO profile configuration
+├── packages.x86_64            # Live ISO packages
+├── target-packages.x86_64     # Target system packages
+├── pacman.conf                # Pacman config for build
+├── airootfs/
+│   ├── etc/                   # System configs
+│   ├── root/
+│   │   ├── install.conf       # Installer defaults
+│   │   └── target-packages.x86_64
+│   └── usr/local/bin/
+│       ├── hyprland-install   # Main TUI installer
+│       ├── nvidia-setup       # NVIDIA driver setup
+│       ├── intel-setup        # Intel VA-API setup
+│       ├── amd-setup          # AMD driver setup
+│       ├── bluetooth-setup    # Bluetooth setup
+│       ├── printer-setup      # CUPS setup
+│       ├── firewall-setup     # UFW setup
+│       └── dotfiles-setup     # Dotfiles deployment
+├── grub/                      # GRUB (UEFI) config
+├── syslinux/                  # Syslinux (BIOS) config
+└── efiboot/                   # systemd-boot entries
 ```
-
-## Customization
-
-### Adding Packages
-
-Edit `archiso/packages.x86_64` to add or remove packages:
-
-```
-# Add your packages, one per line
-firefox
-code
-```
-
-### Adding Custom Files
-
-Place files in `archiso/airootfs/` mirroring the target path:
-- `airootfs/etc/myconfig.conf` → `/etc/myconfig.conf`
-- `airootfs/usr/local/bin/myscript` → `/usr/local/bin/myscript`
-
-### Enabling Services
-
-Edit `archiso/airootfs/etc/systemd/system-preset/00-archiso.preset`:
-
-```
-enable myservice.service
-```
-
-### Modifying Boot Options
-
-- **GRUB (UEFI)**: Edit `archiso/grub/grub.cfg`
-- **Syslinux (BIOS)**: Edit `archiso/syslinux/syslinux.cfg`
-- **systemd-boot**: Edit files in `archiso/efiboot/loader/`
-
-## Boot Options
-
-The ISO provides several boot options:
-
-| Option | Description |
-|--------|-------------|
-| Default | Normal boot with persistent storage |
-| copytoram | Copy ISO to RAM (removes USB drive dependency) |
-| Accessibility | Boot with speech synthesis enabled |
-
-## Live Environment
-
-After booting:
-- **Root password**: None (empty, auto-login enabled)
-- **Installation**: Run `archinstall` for guided setup
-- **Network**: NetworkManager is pre-enabled
-- **SSH**: Available for remote access
 
 ## Creating Releases
 
@@ -115,18 +191,3 @@ Tag a commit to create a GitHub release with the ISO:
 git tag v1.0.0
 git push origin v1.0.0
 ```
-
-## Requirements
-
-### GitHub Actions
-- Runs on `ubuntu-latest` with Arch Linux container
-- No additional secrets required
-
-### Local Build
-- Arch Linux system
-- `archiso` package installed
-- Root privileges for mkarchiso
-
-## License
-
-This configuration is based on the official Arch Linux [releng profile](https://gitlab.archlinux.org/archlinux/archiso/-/tree/master/configs/releng).
