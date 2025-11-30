@@ -90,6 +90,7 @@ slurp
 wl-clipboard
 brightnessctl
 btop
+fastfetch
 man-db
 man-pages
 bash-completion

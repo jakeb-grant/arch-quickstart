@@ -81,6 +81,7 @@ zsh
 
 # Diagnostic tools
 btop
+fastfetch
 lsof
 strace
 
