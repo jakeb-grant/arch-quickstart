@@ -551,6 +551,8 @@ EOF
     info "  Installing Hyprland config..."
     mkdir -p "/mnt/home/$USERNAME/.config/hypr"
     cp /etc/skel/.config/hypr/hyprland.conf "/mnt/home/$USERNAME/.config/hypr/"
+    cp /etc/skel/.config/hypr/start-walker.sh "/mnt/home/$USERNAME/.config/hypr/"
+    chmod +x "/mnt/home/$USERNAME/.config/hypr/start-walker.sh"
     arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
 
     # Configure git for user
