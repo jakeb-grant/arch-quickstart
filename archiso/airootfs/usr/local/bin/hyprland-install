@@ -4,7 +4,7 @@
 # A beautiful TUI installer for a custom Hyprland desktop
 #
 
-set -eE
+set -eEo pipefail
 
 # Trap errors and show what failed
 trap 'echo ""; echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND"; echo "Press Enter to exit..."; read' ERR
@@ -336,12 +336,16 @@ install_base() {
     fi
 
     info "Installing ${#packages[@]} packages..."
+    info "This will take several minutes..."
     echo
 
     # Install packages with pacstrap
-    pacstrap -K /mnt "${packages[@]}" 2>&1 | while read -r line; do
-        echo "$line"
-    done
+    pacstrap -K /mnt "${packages[@]}"
+
+    # Verify installation succeeded
+    if [[ ! -x /mnt/usr/bin/ln ]]; then
+        die "Base system installation failed - coreutils not found!"
+    fi
 
     success "Base system installed!"
     sleep 1
