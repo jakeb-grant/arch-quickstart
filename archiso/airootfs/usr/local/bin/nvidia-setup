@@ -5,7 +5,10 @@
 # This script automates the installation and configuration of NVIDIA drivers
 # for use with Hyprland on Arch Linux, following the official Hyprland wiki.
 #
-# Author: https://github.com/Kn0ax
+# Supports:
+# - Dedicated NVIDIA GPUs
+# - Hybrid graphics (Intel/AMD iGPU + NVIDIA dGPU)
+# - PRIME render offloading
 #
 # ==============================================================================
 
@@ -15,26 +18,54 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 
 # --- GPU Detection ---
+header "Detecting Graphics Hardware"
+
 if [ -z "$(lspci | grep -i 'nvidia')" ]; then
     error "No NVIDIA GPU detected. This script is only for NVIDIA hardware."
 fi
 
+# Detect all GPUs
+NVIDIA_GPU=$(lspci | grep -i 'nvidia' | head -1)
+INTEL_GPU=$(lspci | grep -iE 'VGA.*Intel|Intel.*Graphics')
+AMD_GPU=$(lspci | grep -iE 'VGA.*AMD|AMD.*Radeon')
+
 info "NVIDIA GPU detected:"
-lspci | grep -i 'nvidia'
-echo
+echo "  $NVIDIA_GPU"
+
+# Determine if hybrid setup
+HYBRID_TYPE=""
+if [ -n "$INTEL_GPU" ]; then
+    HYBRID_TYPE="intel"
+    info "Intel iGPU detected (hybrid graphics):"
+    echo "  $INTEL_GPU"
+elif [ -n "$AMD_GPU" ]; then
+    HYBRID_TYPE="amd"
+    info "AMD iGPU detected (hybrid graphics):"
+    echo "  $AMD_GPU"
+else
+    info "Dedicated NVIDIA setup (no integrated GPU detected)"
+fi
 
 # --- Driver Selection ---
-# Turing (16xx, 20xx), Ampere (30xx), Ada (40xx), and newer recommend the open-source kernel modules
-if echo "$(lspci | grep -i 'nvidia')" | grep -q -E "RTX [2-9][0-9]|GTX 16"; then
+header "Selecting Driver Package"
+
+# Turing (16xx, 20xx), Ampere (30xx), Ada (40xx), Blackwell (50xx) and newer require/recommend open modules
+# 50xx REQUIRES open modules
+if echo "$NVIDIA_GPU" | grep -q -E "RTX [5][0-9]"; then
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
-    info "Detected Turing/Ampere/Ada GPU - using nvidia-open-dkms"
+    info "Detected Blackwell (50xx) GPU - nvidia-open-dkms REQUIRED"
+elif echo "$NVIDIA_GPU" | grep -q -E "RTX [2-4][0-9]|GTX 16"; then
+    NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
+    info "Detected Turing/Ampere/Ada GPU - using nvidia-open-dkms (recommended)"
 else
     NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
     info "Detected older GPU - using nvidia-dkms"
@@ -55,9 +86,29 @@ else
     info "Using default linux kernel headers"
 fi
 
-# Confirm before proceeding
-echo
-warn "This script will install NVIDIA drivers and modify system configuration."
+# --- Summary and Confirmation ---
+header "Installation Summary"
+
+echo "The following will be configured:"
+echo "  - Driver package: $NVIDIA_DRIVER_PACKAGE"
+echo "  - Kernel headers: $KERNEL_HEADERS"
+if [ -n "$HYBRID_TYPE" ]; then
+    echo "  - Hybrid graphics: Yes ($HYBRID_TYPE iGPU + NVIDIA dGPU)"
+    echo "  - PRIME offloading: Yes (prime-run wrapper)"
+else
+    echo "  - Hybrid graphics: No (dedicated NVIDIA)"
+fi
+echo ""
+echo "System modifications:"
+echo "  - /etc/modprobe.d/nvidia.conf"
+echo "  - /etc/mkinitcpio.conf (MODULES)"
+echo "  - ~/.config/hypr/hyprland.conf (environment variables)"
+if [ -n "$HYBRID_TYPE" ]; then
+    echo "  - /usr/local/bin/prime-run (wrapper script)"
+fi
+
+echo ""
+warn "This will modify system configuration files."
 read -p "Continue? [y/N] " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -65,18 +116,19 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# Force package database refresh
+# --- Package Installation ---
+header "Installing Packages"
+
 info "Updating package database..."
 sudo pacman -Syu --noconfirm
 
-# Install packages
 PACKAGES_TO_INSTALL=(
     "${KERNEL_HEADERS}"
     "${NVIDIA_DRIVER_PACKAGE}"
     "nvidia-utils"
     "lib32-nvidia-utils"
     "egl-wayland"
-    "libva-nvidia-driver" # For VA-API hardware acceleration
+    "libva-nvidia-driver"  # VA-API hardware video acceleration
     "qt5-wayland"
     "qt6-wayland"
 )
@@ -84,50 +136,155 @@ PACKAGES_TO_INSTALL=(
 info "Installing NVIDIA packages..."
 sudo pacman -S --needed --noconfirm "${PACKAGES_TO_INSTALL[@]}"
 
-# Configure modprobe for early KMS
-info "Configuring modprobe for early KMS..."
+# --- Modprobe Configuration ---
+header "Configuring Kernel Modules"
+
+info "Creating /etc/modprobe.d/nvidia.conf..."
 echo "options nvidia_drm modeset=1" | sudo tee /etc/modprobe.d/nvidia.conf >/dev/null
 
-# Configure mkinitcpio for early loading
+# --- Mkinitcpio Configuration ---
 MKINITCPIO_CONF="/etc/mkinitcpio.conf"
-
-# Define modules
-NVIDIA_MODULES="nvidia nvidia_modeset nvidia_uvm nvidia_drm"
 
 # Create backup
 info "Backing up mkinitcpio.conf..."
-sudo cp "$MKINITCPIO_CONF" "${MKINITCPIO_CONF}.backup"
+sudo cp "$MKINITCPIO_CONF" "${MKINITCPIO_CONF}.backup.$(date +%Y%m%d%H%M%S)"
 
-# Remove any old nvidia modules to prevent duplicates
-info "Configuring mkinitcpio for NVIDIA modules..."
-sudo sed -i -E 's/ nvidia_drm//g; s/ nvidia_uvm//g; s/ nvidia_modeset//g; s/ nvidia//g;' "$MKINITCPIO_CONF"
-# Add the new modules at the start of the MODULES array
-sudo sed -i -E "s/^(MODULES=\\()/\\1${NVIDIA_MODULES} /" "$MKINITCPIO_CONF"
-# Clean up potential double spaces
-sudo sed -i -E 's/  +/ /g' "$MKINITCPIO_CONF"
+# Build modules list based on hybrid type
+# For Intel hybrid: i915 must come BEFORE nvidia modules to prevent boot stalls
+if [ "$HYBRID_TYPE" = "intel" ]; then
+    MODULES_TO_ADD="i915 nvidia nvidia_modeset nvidia_uvm nvidia_drm"
+    info "Intel hybrid detected - adding i915 before NVIDIA modules"
+    info "  (This prevents Electron/Chromium apps from stalling on boot)"
+elif [ "$HYBRID_TYPE" = "amd" ]; then
+    MODULES_TO_ADD="amdgpu nvidia nvidia_modeset nvidia_uvm nvidia_drm"
+    info "AMD hybrid detected - adding amdgpu before NVIDIA modules"
+else
+    MODULES_TO_ADD="nvidia nvidia_modeset nvidia_uvm nvidia_drm"
+fi
+
+# Remove any existing nvidia/igpu modules to prevent duplicates
+info "Configuring mkinitcpio for early KMS..."
+sudo sed -i -E 's/ ?nvidia_drm//g; s/ ?nvidia_uvm//g; s/ ?nvidia_modeset//g; s/ ?nvidia//g; s/ ?i915//g; s/ ?amdgpu//g;' "$MKINITCPIO_CONF"
+
+# Add modules at the start of the MODULES array
+sudo sed -i -E "s/^(MODULES=\\()/\\1${MODULES_TO_ADD} /" "$MKINITCPIO_CONF"
+
+# Clean up potential double spaces or leading spaces in array
+sudo sed -i -E 's/MODULES=\( +/MODULES=(/g; s/  +/ /g' "$MKINITCPIO_CONF"
 
 info "Regenerating initramfs..."
 sudo mkinitcpio -P
 
-# Add NVIDIA environment variables to hyprland.conf
-HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
-if [ -f "$HYPRLAND_CONF" ]; then
-    info "Adding NVIDIA environment variables to hyprland.conf..."
-    cat >>"$HYPRLAND_CONF" <<'EOF'
+# --- PRIME Run Wrapper (for hybrid graphics) ---
+if [ -n "$HYBRID_TYPE" ]; then
+    header "Setting Up PRIME Offloading"
 
-# NVIDIA environment variables
-env = NVD_BACKEND,direct
-env = LIBVA_DRIVER_NAME,nvidia
-env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+    info "Creating /usr/local/bin/prime-run wrapper..."
+    sudo tee /usr/local/bin/prime-run >/dev/null <<'EOF'
+#!/bin/bash
+# PRIME render offload wrapper
+# Run applications on the NVIDIA dGPU in hybrid graphics systems
+#
+# Usage: prime-run <application> [arguments]
+#
+# Example: prime-run glxinfo | grep "OpenGL renderer"
+
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export __VK_LAYER_NV_optimus=NVIDIA_only
+
+exec "$@"
 EOF
-else
-    warn "Hyprland config not found at $HYPRLAND_CONF"
-    warn "You may need to add these environment variables manually:"
-    echo "  env = NVD_BACKEND,direct"
-    echo "  env = LIBVA_DRIVER_NAME,nvidia"
-    echo "  env = __GLX_VENDOR_LIBRARY_NAME,nvidia"
+    sudo chmod +x /usr/local/bin/prime-run
+
+    info "prime-run wrapper installed!"
+    echo "  Usage: prime-run <application>"
+    echo "  Example: prime-run glxinfo | grep 'OpenGL renderer'"
 fi
 
-echo
+# --- Hyprland Configuration ---
+header "Configuring Hyprland Environment"
+
+HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
+if [ -f "$HYPRLAND_CONF" ]; then
+    # Check if NVIDIA config already exists
+    if grep -q "NVIDIA environment variables" "$HYPRLAND_CONF"; then
+        warn "NVIDIA environment variables already present in hyprland.conf"
+        warn "Skipping to avoid duplicates. Please verify manually."
+    else
+        info "Adding NVIDIA environment variables to hyprland.conf..."
+
+        if [ -n "$HYBRID_TYPE" ]; then
+            # Hybrid graphics config
+            cat >>"$HYPRLAND_CONF" <<'EOF'
+
+# ==============================================================================
+# NVIDIA environment variables (hybrid graphics)
+# ==============================================================================
+env = LIBVA_DRIVER_NAME,nvidia
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = NVD_BACKEND,direct
+
+# Electron/Chromium Wayland support (reduces flickering)
+env = ELECTRON_OZONE_PLATFORM_HINT,auto
+
+# Uncomment if you have multi-monitor issues on hybrid graphics:
+# env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0
+EOF
+        else
+            # Dedicated NVIDIA config
+            cat >>"$HYPRLAND_CONF" <<'EOF'
+
+# ==============================================================================
+# NVIDIA environment variables
+# ==============================================================================
+env = LIBVA_DRIVER_NAME,nvidia
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = NVD_BACKEND,direct
+
+# Electron/Chromium Wayland support (reduces flickering)
+env = ELECTRON_OZONE_PLATFORM_HINT,auto
+EOF
+        fi
+        info "Environment variables added to hyprland.conf"
+    fi
+else
+    warn "Hyprland config not found at $HYPRLAND_CONF"
+    warn "Add these environment variables manually to your hyprland.conf:"
+    echo ""
+    echo "  env = LIBVA_DRIVER_NAME,nvidia"
+    echo "  env = __GLX_VENDOR_LIBRARY_NAME,nvidia"
+    echo "  env = NVD_BACKEND,direct"
+    echo "  env = ELECTRON_OZONE_PLATFORM_HINT,auto"
+    if [ -n "$HYBRID_TYPE" ]; then
+        echo ""
+        echo "  # For multi-monitor on hybrid graphics (if needed):"
+        echo "  # env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
+    fi
+fi
+
+# --- Completion ---
+header "Setup Complete"
+
 info "NVIDIA setup complete!"
-info "Please reboot your system for changes to take effect."
+echo ""
+echo "Next steps:"
+echo "  1. Reboot your system"
+echo "  2. Verify driver is loaded: nvidia-smi"
+echo "  3. Verify DRM modeset: cat /sys/module/nvidia_drm/parameters/modeset"
+echo "     (Should return 'Y')"
+
+if [ -n "$HYBRID_TYPE" ]; then
+    echo ""
+    echo "Hybrid graphics notes:"
+    echo "  - By default, apps run on the $HYBRID_TYPE iGPU (power saving)"
+    echo "  - Use 'prime-run <app>' to run on NVIDIA dGPU"
+    echo "  - Example: prime-run steam"
+    echo ""
+    echo "  If you experience multi-monitor issues, try adding to hyprland.conf:"
+    echo "    env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
+fi
+
+echo ""
+warn "A reboot is required for changes to take effect."
