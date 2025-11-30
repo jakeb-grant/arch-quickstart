@@ -645,7 +645,8 @@ yay -S --noconfirm walker-bin elephant \
     elephant-clipboard \
     elephant-calc \
     elephant-runner \
-    elephant-files
+    elephant-files \
+    elephant-archlinuxpkgs
 AURSCRIPT
 
     chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
