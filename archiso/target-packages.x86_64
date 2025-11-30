@@ -1,8 +1,9 @@
 # Target system packages
-# These packages are intended for installation on the target system
-# (not included in the live ISO itself)
+# Clean Hyprland desktop installation
 
-# Base system
+# =============================================================================
+# Base System
+# =============================================================================
 base
 base-devel
 linux
@@ -12,7 +13,6 @@ linux-headers
 # Bootloader
 grub
 efibootmgr
-os-prober
 
 # Filesystem
 btrfs-progs
@@ -20,28 +20,80 @@ dosfstools
 e2fsprogs
 ntfs-3g
 
-# Networking
-networkmanager
-openssh
-wget
-curl
+# Hardware support
+amd-ucode
+intel-ucode
 
-# System utilities
-sudo
-vim
+# =============================================================================
+# Desktop Environment - Hyprland
+# =============================================================================
+
+# Core
+hyprland
+sddm
+waybar
+rofi-wayland
+
+# Wayland support
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+qt5-wayland
+qt6-wayland
+
+# =============================================================================
+# Terminal & Editor
+# =============================================================================
+ghostty
+nano
+zed
+
+# =============================================================================
+# Applications
+# =============================================================================
+firefox
+nautilus
+
+# =============================================================================
+# Fonts
+# =============================================================================
+ttf-jetbrains-mono-nerd
+noto-fonts
+noto-fonts-emoji
+
+# =============================================================================
+# Authentication & Keyring
+# =============================================================================
+polkit-gnome
+gnome-keyring
+
+# =============================================================================
+# Audio
+# =============================================================================
+pipewire
+pipewire-alsa
+pipewire-pulse
+pipewire-jack
+wireplumber
+
+# =============================================================================
+# Networking
+# =============================================================================
+networkmanager
+network-manager-applet
+
+# =============================================================================
+# Utilities
+# =============================================================================
 git
+grim
+slurp
+wl-clipboard
+brightnessctl
 htop
 man-db
 man-pages
 bash-completion
 zsh
-
-# Hardware
-amd-ucode
-intel-ucode
-
-# Audio
-pipewire
-pipewire-alsa
-pipewire-pulse
-wireplumber
+wget
+curl
+unzip
