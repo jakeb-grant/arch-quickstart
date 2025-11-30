@@ -439,15 +439,15 @@ install_aur_packages() {
     info "Installing AUR packages (Walker launcher)..."
     echo
 
-    # Ensure tmp directory exists
-    mkdir -p /mnt/tmp
+    # Use user's home directory (guaranteed to exist after useradd -m)
+    local script_path="/mnt/home/$USERNAME/install-aur.sh"
 
     # Create a script to run as the user for AUR installation
-    cat > /mnt/tmp/install-aur.sh << 'AURSCRIPT'
+    cat > "$script_path" << 'AURSCRIPT'
 #!/bin/bash
 set -e
 
-cd /tmp
+cd ~
 
 # Install yay
 if ! command -v yay &>/dev/null; then
@@ -462,18 +462,19 @@ fi
 yay -S --noconfirm walker-bin elephant
 AURSCRIPT
 
-    chmod +x /mnt/tmp/install-aur.sh
+    chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
+    chmod +x "$script_path"
 
     # Verify script exists
-    if [[ ! -f /mnt/tmp/install-aur.sh ]]; then
+    if [[ ! -f "$script_path" ]]; then
         die "Failed to create AUR install script!"
     fi
 
     info "Building and installing yay (AUR helper)..."
-    arch-chroot /mnt sudo -u "$USERNAME" bash /tmp/install-aur.sh
+    arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh"
 
     # Cleanup
-    rm -f /mnt/tmp/install-aur.sh
+    rm -f "$script_path"
 
     success "AUR packages installed!"
     sleep 1
