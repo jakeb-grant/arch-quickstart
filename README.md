@@ -8,7 +8,7 @@ A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop enviro
 - Hyprland (Wayland compositor)
 - SDDM (display manager)
 - Waybar (status bar)
-- Walker (application launcher, via AUR)
+- Walker (application launcher with Elephant indexer)
 - Ghostty (terminal)
 
 **Applications:**
@@ -67,16 +67,26 @@ The TUI installer launches automatically and guides you through:
 | `@home` | `/home` | User data |
 | `@snapshots` | `/.snapshots` | Snapshot storage |
 | `@var_log` | `/var/log` | Log files |
+| `@swap` | `/swap` | Swap file (nodatacow) |
 
 Mount options: `noatime,compress=zstd,space_cache=v2`
 
+**Swap File:**
+- Automatically sized based on RAM (supports hibernation)
+- RAM ≤ 2GB: 2x RAM
+- RAM 2-16GB: Equal to RAM
+- RAM > 16GB: Capped at 16GB
+
 #### Packages Installed
-~70 packages including the full Hyprland desktop, plus AUR packages (walker, elephant) via yay.
+~70 packages including the full Hyprland desktop, plus AUR packages via yay:
+- `walker-bin` - Application launcher
+- `elephant` + providers - Application indexer for Walker
 
 #### System Configuration Applied
 - Locale: `en_US.UTF-8`
 - Keymap: `us`
 - Shell: `bash`
+- Multilib repository: Enabled (for 32-bit support)
 - Git configured with name/email
 - GRUB bootloader (UEFI)
 - Services enabled: NetworkManager, SDDM
@@ -88,18 +98,51 @@ After reboot:
 2. Log in with your username/password
 3. Hyprland starts automatically
 
-### 4. Post-Install Setup (Optional)
+### 4. Post-Install Setup
 
-Run these scripts as needed after first boot:
+Run these scripts as needed after first boot.
 
 #### GPU Drivers
+
 ```bash
-nvidia-setup    # NVIDIA (auto-detects driver, configures Hyprland)
-intel-setup     # Intel (VA-API acceleration)
-amd-setup       # AMD (Mesa, Vulkan, VA-API)
+nvidia-setup    # NVIDIA GPUs (dedicated or hybrid)
+intel-setup     # Intel GPUs (standalone only)
+amd-setup       # AMD GPUs (standalone only)
 ```
 
+**Which script to use:**
+| Your Hardware | Script |
+|---------------|--------|
+| Intel iGPU + NVIDIA dGPU | `nvidia-setup` |
+| AMD APU + NVIDIA dGPU | `nvidia-setup` |
+| Standalone NVIDIA | `nvidia-setup` |
+| Standalone AMD (RX series, APU) | `amd-setup` |
+| Standalone Intel | `intel-setup` |
+
+##### nvidia-setup Features
+- Auto-detects GPU generation (selects correct driver package)
+- Detects hybrid graphics (Intel/AMD + NVIDIA)
+- Configures early KMS modules in mkinitcpio
+- For hybrid: installs `prime-run` wrapper for GPU offloading
+- Adds Hyprland environment variables
+- Auto-enables multilib if needed
+
+**After nvidia-setup on hybrid graphics:**
+```bash
+# Apps run on iGPU by default (power saving)
+# Use prime-run to run on NVIDIA dGPU:
+prime-run steam
+prime-run glxinfo | grep "OpenGL renderer"
+```
+
+##### amd-setup / intel-setup Features
+- Installs Mesa, Vulkan, and VA-API drivers
+- Detects if NVIDIA is present and warns about hybrid
+- Adds Hyprland environment variables
+- Auto-enables multilib if needed
+
 #### System Features
+
 ```bash
 bluetooth-setup   # Bluetooth + Blueman GUI
 printer-setup     # CUPS + drivers
@@ -128,11 +171,27 @@ dotfiles-setup    # Clone your dotfiles repo
 | `XF86Audio*` | Volume controls |
 | `XF86MonBrightness*` | Brightness controls |
 
+## Walker (Application Launcher)
+
+Walker uses Elephant as its backend indexer. The following providers are installed:
+
+| Provider | Function |
+|----------|----------|
+| `desktopapplications` | Launch installed applications |
+| `windows` | Switch between open windows |
+| `clipboard` | Clipboard history |
+| `calc` | Calculator |
+| `runner` | Run shell commands |
+| `files` | File search |
+| `archlinuxpkgs` | Search Arch packages |
+
 ## Building the ISO
 
 ### GitHub Actions (Automatic)
 
 Push to `main` or `claude/*` branches to trigger a build. Download the ISO from workflow artifacts.
+
+**Note:** For security, builds only run on pushes and same-repo PRs. Fork PRs are blocked.
 
 ### Local Build
 
@@ -174,9 +233,11 @@ archiso/
 ├── profiledef.sh              # ISO profile configuration
 ├── packages.x86_64            # Live ISO packages
 ├── target-packages.x86_64     # Target system packages
-├── pacman.conf                # Pacman config for build
+├── pacman.conf                # Pacman config (multilib enabled)
 ├── airootfs/
 │   ├── etc/
+│   │   ├── pacman.conf        # Target system pacman config
+│   │   ├── pacman.d/mirrorlist
 │   │   └── skel/.config/hypr/
 │   │       └── hyprland.conf  # Default Hyprland config
 │   ├── root/
@@ -184,8 +245,8 @@ archiso/
 │   │   └── target-packages.x86_64
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
-│       ├── nvidia-setup       # NVIDIA driver setup
-│       ├── intel-setup        # Intel VA-API setup
+│       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
+│       ├── intel-setup        # Intel driver setup
 │       ├── amd-setup          # AMD driver setup
 │       ├── bluetooth-setup    # Bluetooth setup
 │       ├── printer-setup      # CUPS setup
