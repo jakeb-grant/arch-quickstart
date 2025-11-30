@@ -4,7 +4,10 @@
 # A beautiful TUI installer for a custom Hyprland desktop
 #
 
-set -e
+set -eE
+
+# Trap errors and show what failed
+trap 'echo ""; echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND"; echo "Press Enter to exit..."; read' ERR
 
 # Colors for gum
 export GUM_CHOOSE_CURSOR_FOREGROUND="#89b4fa"
@@ -354,67 +357,59 @@ configure_system() {
     echo
 
     # Generate fstab
-    gum spin --spinner dot --title "Generating fstab..." -- \
-        bash -c 'genfstab -U /mnt >> /mnt/etc/fstab'
+    info "  Generating fstab..."
+    genfstab -U /mnt >> /mnt/etc/fstab
 
     # Timezone
-    gum spin --spinner dot --title "Setting timezone..." -- \
-        arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
-
+    info "  Setting timezone..."
+    arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
     arch-chroot /mnt hwclock --systohc
 
     # Locale
-    gum spin --spinner dot --title "Configuring locale..." -- bash -c "
-        echo '$DEFAULT_LOCALE UTF-8' >> /mnt/etc/locale.gen
-        arch-chroot /mnt locale-gen
-        echo 'LANG=$DEFAULT_LOCALE' > /mnt/etc/locale.conf
-    "
+    info "  Configuring locale..."
+    echo "$DEFAULT_LOCALE UTF-8" >> /mnt/etc/locale.gen
+    arch-chroot /mnt locale-gen
+    echo "LANG=$DEFAULT_LOCALE" > /mnt/etc/locale.conf
 
     # Keyboard/Console
-    gum spin --spinner dot --title "Configuring keyboard..." -- bash -c "
-        echo 'KEYMAP=$DEFAULT_KEYMAP' > /mnt/etc/vconsole.conf
-    "
+    info "  Configuring keyboard..."
+    echo "KEYMAP=$DEFAULT_KEYMAP" > /mnt/etc/vconsole.conf
 
     # Hostname
-    gum spin --spinner dot --title "Setting hostname..." -- bash -c "
-        echo '$HOSTNAME' > /mnt/etc/hostname
-        cat > /mnt/etc/hosts << EOF
+    info "  Setting hostname..."
+    echo "$HOSTNAME" > /mnt/etc/hostname
+    cat > /mnt/etc/hosts << EOF
 127.0.0.1   localhost
 ::1         localhost
 127.0.1.1   $HOSTNAME.localdomain $HOSTNAME
 EOF
-    "
 
     # Create user
-    gum spin --spinner dot --title "Creating user $USERNAME..." -- bash -c "
-        arch-chroot /mnt useradd -m -G wheel -s '$DEFAULT_SHELL' '$USERNAME'
-        echo '$USERNAME:$PASSWORD' | arch-chroot /mnt chpasswd
-    "
+    info "  Creating user $USERNAME..."
+    arch-chroot /mnt useradd -m -G wheel -s "$DEFAULT_SHELL" "$USERNAME"
+    echo "$USERNAME:$PASSWORD" | arch-chroot /mnt chpasswd
 
     # Configure git for user
     if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
-        gum spin --spinner dot --title "Configuring git..." -- bash -c "
-            arch-chroot /mnt sudo -u '$USERNAME' git config --global user.name '$GIT_USER_NAME'
-            arch-chroot /mnt sudo -u '$USERNAME' git config --global user.email '$GIT_USER_EMAIL'
-            arch-chroot /mnt sudo -u '$USERNAME' git config --global init.defaultBranch main
-        "
+        info "  Configuring git..."
+        arch-chroot /mnt sudo -u "$USERNAME" git config --global user.name "$GIT_USER_NAME"
+        arch-chroot /mnt sudo -u "$USERNAME" git config --global user.email "$GIT_USER_EMAIL"
+        arch-chroot /mnt sudo -u "$USERNAME" git config --global init.defaultBranch main
     fi
 
     # Enable sudo for wheel group
-    gum spin --spinner dot --title "Configuring sudo..." -- \
-        sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
+    info "  Configuring sudo..."
+    sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
 
     # Install bootloader
-    gum spin --spinner dot --title "Installing GRUB bootloader..." -- bash -c '
-        arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
-        arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-    '
+    info "  Installing GRUB bootloader..."
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+    arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
     # Enable services
-    gum spin --spinner dot --title "Enabling services..." -- bash -c '
-        arch-chroot /mnt systemctl enable NetworkManager
-        arch-chroot /mnt systemctl enable sddm
-    '
+    info "  Enabling services..."
+    arch-chroot /mnt systemctl enable NetworkManager
+    arch-chroot /mnt systemctl enable sddm
 
     success "System configured!"
     sleep 1
