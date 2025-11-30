@@ -439,6 +439,9 @@ install_aur_packages() {
     info "Installing AUR packages (Walker launcher)..."
     echo
 
+    # Ensure tmp directory exists
+    mkdir -p /mnt/tmp
+
     # Create a script to run as the user for AUR installation
     cat > /mnt/tmp/install-aur.sh << 'AURSCRIPT'
 #!/bin/bash
@@ -460,6 +463,11 @@ yay -S --noconfirm walker-bin elephant
 AURSCRIPT
 
     chmod +x /mnt/tmp/install-aur.sh
+
+    # Verify script exists
+    if [[ ! -f /mnt/tmp/install-aur.sh ]]; then
+        die "Failed to create AUR install script!"
+    fi
 
     info "Building and installing yay (AUR helper)..."
     arch-chroot /mnt sudo -u "$USERNAME" bash /tmp/install-aur.sh
