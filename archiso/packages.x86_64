@@ -1,0 +1,104 @@
+# Base system
+base
+linux
+linux-firmware
+mkinitcpio
+mkinitcpio-archiso
+
+# Bootloaders
+efibootmgr
+grub
+syslinux
+
+# Filesystem tools
+btrfs-progs
+dosfstools
+e2fsprogs
+exfatprogs
+f2fs-tools
+gptfdisk
+mtools
+ntfs-3g
+parted
+xfsprogs
+
+# Hardware support
+amd-ucode
+intel-ucode
+memtest86+
+memtest86+-efi
+
+# Networking
+dhclient
+dhcpcd
+dnsmasq
+ethtool
+iwd
+modemmanager
+networkmanager
+nfs-utils
+nss-mdns
+openssh
+usb_modeswitch
+wireless-regdb
+wpa_supplicant
+
+# System utilities
+arch-install-scripts
+archinstall
+bash-completion
+bind
+dmidecode
+dmraid
+dnsutils
+hdparm
+hyperv
+less
+libfido2
+libusb-compat
+lsscsi
+lvm2
+man-db
+man-pages
+mdadm
+nvme-cli
+open-iscsi
+open-vm-tools
+pv
+reflector
+rsync
+screen
+sdparm
+sg3_utils
+smartmontools
+sudo
+tmux
+tpm2-tss
+usbmuxd
+usbutils
+vim
+which
+zsh
+
+# Diagnostic tools
+htop
+lsof
+strace
+
+# Archive tools
+p7zip
+unrar
+unzip
+zip
+
+# Git and development
+git
+
+# Terminfo for better terminal support
+foot-terminfo
+kitty-terminfo
+rxvt-unicode-terminfo
+terminus-font
+
+# Cloud support (optional)
+cloud-init

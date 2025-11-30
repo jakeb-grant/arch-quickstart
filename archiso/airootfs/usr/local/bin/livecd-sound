@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Configure sound on the live CD
+
+# Unmute all channels
+if command -v amixer &>/dev/null; then
+    amixer sset Master unmute &>/dev/null || true
+    amixer sset Speaker unmute &>/dev/null || true
+    amixer sset Headphone unmute &>/dev/null || true
+    amixer sset Master 70% &>/dev/null || true
+fi
+
+printf "Sound configured.\n"

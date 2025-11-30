@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Opens the Arch Linux Installation Guide
+
+browser="w3m"
+url="https://wiki.archlinux.org/title/Installation_guide"
+
+# Try to open in browser, fall back to text-based browser
+if command -v "$browser" &>/dev/null; then
+    exec "$browser" "$url"
+else
+    printf "The Installation Guide is available at:\n%s\n\n" "$url"
+    printf "For a guided installation, run: archinstall\n"
+fi

@@ -1,0 +1,14 @@
+# Mount point for pacman gpg keyring (RAM-based for live system)
+
+[Unit]
+Description=Pacman keyring tmpfs mount
+Before=pacman-init.service
+
+[Mount]
+What=tmpfs
+Where=/etc/pacman.d/gnupg
+Type=tmpfs
+Options=mode=0755,nodev,nosuid
+
+[Install]
+WantedBy=local-fs.target

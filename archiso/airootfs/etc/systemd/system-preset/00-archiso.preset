@@ -1,0 +1,26 @@
+# Archiso systemd service presets
+
+# Enable these services by default
+enable NetworkManager.service
+enable sshd.service
+enable systemd-networkd.service
+enable systemd-resolved.service
+enable iwd.service
+enable ModemManager.service
+enable pacman-init.service
+enable choose-mirror.service
+enable reflector.service
+enable systemd-timesyncd.service
+
+# cloud-init (optional)
+enable cloud-init.service
+enable cloud-init-local.service
+enable cloud-config.service
+enable cloud-final.service
+
+# VM guest services
+enable open-vm-tools.service
+enable qemu-guest-agent.service
+enable hv_fcopy_daemon.service
+enable hv_kvp_daemon.service
+enable hv_vss_daemon.service

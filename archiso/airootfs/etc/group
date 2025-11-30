@@ -1,0 +1,8 @@
+root:x:0:root
+adm:x:4:
+wheel:x:10:
+uucp:x:14:
+optical:x:93:
+video:x:985:
+storage:x:986:
+network:x:90:
