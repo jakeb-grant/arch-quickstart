@@ -191,11 +191,33 @@ fi
 # ==============================================================================
 header "Installing Packages"
 
+# Check if multilib is enabled (required for lib32 packages)
+if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+    warn "Multilib repository is not enabled!"
+    info "Enabling multilib repository for 32-bit support..."
+
+    # Enable multilib by uncommenting the section
+    sudo sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+
+    # Verify it was enabled
+    if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+        warn "Could not auto-enable multilib. Adding it manually..."
+        echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf >/dev/null
+    fi
+
+    info "Multilib repository enabled"
+fi
+
 info "Updating package database..."
-sudo pacman -Syu --noconfirm
+if ! sudo pacman -Syu --noconfirm; then
+    error "Failed to update package database!"
+fi
 
 info "Installing Intel GPU packages..."
-sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"
+if ! sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"; then
+    echo ""
+    error "Failed to install Intel GPU packages! Check the output above for details."
+fi
 
 # ==============================================================================
 # Hyprland Configuration
