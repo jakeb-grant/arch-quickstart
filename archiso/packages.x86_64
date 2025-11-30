@@ -50,7 +50,6 @@ bash-completion
 bind
 dmidecode
 dmraid
-dnsutils
 hdparm
 hyperv
 less
@@ -86,7 +85,7 @@ lsof
 strace
 
 # Archive tools
-p7zip
+7zip
 unrar
 unzip
 zip
