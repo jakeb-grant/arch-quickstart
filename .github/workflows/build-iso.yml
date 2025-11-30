@@ -40,7 +40,7 @@ jobs:
       - name: Update system and install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm archiso mkinitcpio-archiso git
+          pacman -S --noconfirm archiso mkinitcpio-archiso grub dosfstools squashfs-tools libisoburn
 
       - name: Build ISO
         run: |
