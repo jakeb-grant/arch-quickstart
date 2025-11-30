@@ -442,17 +442,20 @@ mount_partitions() {
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@snapshots
     btrfs subvolume create /mnt/@var_log
+    btrfs subvolume create /mnt/@swap
 
     # Unmount and remount with subvolumes
     umount /mnt
 
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$mount_device" /mnt
 
-    mkdir -p /mnt/{boot/efi,home,.snapshots,var/log}
+    mkdir -p /mnt/{boot/efi,home,.snapshots,var/log,swap}
 
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$mount_device" /mnt/home
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$mount_device" /mnt/.snapshots
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@var_log "$mount_device" /mnt/var/log
+    # Swap subvolume: no compression, no copy-on-write
+    mount -o noatime,nodatacow,subvol=@swap "$mount_device" /mnt/swap
 
     mount "$EFI_PART" /mnt/boot/efi
 
@@ -611,6 +614,63 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# Configure Swap
+# -----------------------------------------------------------------------------
+
+configure_swap() {
+    header
+    info "Configuring swap file..."
+    echo
+
+    # Get total RAM in MB
+    local ram_mb
+    ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+
+    # Calculate swap size based on RAM (for hibernate support, match RAM)
+    # Best practices:
+    #   RAM <= 2GB:  2x RAM
+    #   RAM 2-8GB:   Equal to RAM
+    #   RAM > 8GB:   Equal to RAM (cap at 16GB for practicality)
+    local swap_mb
+    if [[ $ram_mb -le 2048 ]]; then
+        swap_mb=$((ram_mb * 2))
+    elif [[ $ram_mb -gt 16384 ]]; then
+        swap_mb=16384  # Cap at 16GB
+    else
+        swap_mb=$ram_mb
+    fi
+
+    local swap_gb=$((swap_mb / 1024))
+    info "Detected RAM: ${ram_mb}MB"
+    info "Creating swap file: ${swap_gb}GB (${swap_mb}MB)"
+
+    # Create swap file with proper attributes for BTRFS
+    # The @swap subvolume is already mounted with nodatacow
+    info "  Creating swap file (this may take a moment)..."
+
+    # Use truncate for instant allocation, then chattr for safety
+    truncate -s 0 /mnt/swap/swapfile
+    chattr +C /mnt/swap/swapfile  # Disable copy-on-write
+
+    # Allocate the actual space
+    dd if=/dev/zero of=/mnt/swap/swapfile bs=1M count="$swap_mb" status=progress
+
+    # Set permissions (must be 600)
+    chmod 600 /mnt/swap/swapfile
+
+    # Format as swap
+    info "  Formatting swap file..."
+    mkswap /mnt/swap/swapfile
+
+    # Add to fstab
+    info "  Adding swap to fstab..."
+    echo "/swap/swapfile none swap defaults 0 0" >> /mnt/etc/fstab
+
+    success "Swap file configured! (${swap_gb}GB)"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
 # Install AUR Packages
 # -----------------------------------------------------------------------------
 
@@ -732,6 +792,7 @@ main() {
     check_network
     install_base
     configure_system
+    configure_swap
     install_aur_packages
     finish
 }
