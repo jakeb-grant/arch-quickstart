@@ -30,4 +30,5 @@ file_permissions=(
   ["/usr/local/bin/livecd-sound"]="0:0:755"
   ["/usr/local/bin/hyprland-install"]="0:0:755"
   ["/usr/local/bin/nvidia-setup"]="0:0:755"
+  ["/usr/local/bin/intel-setup"]="0:0:755"
 )
