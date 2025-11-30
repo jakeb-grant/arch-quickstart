@@ -1,20 +1,8 @@
 
-================================================================================
-       🌸 Hyprland Arch Linux Live Environment 🌸
-================================================================================
+Hyprland Arch Linux Live Environment
 
- To install the Hyprland desktop system, run:
+The installer is running on tty1.
+Press Alt+F1 to return to the installer.
 
-   hyprland-install
-
- This will guide you through:
-   • Disk selection and partitioning (BTRFS with subvolumes)
-   • User account creation
-   • Full Hyprland desktop installation
-
- Alternative options:
-   • 'archinstall'  - Official guided installer
-   • Manual install - Follow the Arch Wiki
-
-================================================================================
+To start the installer manually: hyprland-install
 
