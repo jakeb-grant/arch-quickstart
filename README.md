@@ -112,10 +112,22 @@ dotfiles-setup    # Clone your dotfiles repo
 
 | Keybind | Action |
 |---------|--------|
-| `SUPER + Enter` | Open terminal (Ghostty) |
+| `SUPER + Return` | Open terminal (Ghostty) |
 | `SUPER + D` | Application launcher (Walker) |
+| `SUPER + E` | File manager (Nautilus) |
 | `SUPER + Q` | Close window |
+| `SUPER + F` | Toggle fullscreen |
+| `SUPER + V` | Toggle floating |
+| `SUPER + M` | Exit Hyprland |
 | `SUPER + 1-9` | Switch workspace |
+| `SUPER + SHIFT + 1-9` | Move window to workspace |
+| `SUPER + H/J/K/L` | Move focus (vim keys) |
+| `SUPER + Arrow Keys` | Move focus |
+| `SUPER + Mouse Drag` | Move/resize window |
+| `Print` | Screenshot region to clipboard |
+| `SHIFT + Print` | Screenshot full screen |
+| `XF86Audio*` | Volume controls |
+| `XF86MonBrightness*` | Brightness controls |
 
 ## Building the ISO
 
@@ -165,7 +177,9 @@ archiso/
 ├── target-packages.x86_64     # Target system packages
 ├── pacman.conf                # Pacman config for build
 ├── airootfs/
-│   ├── etc/                   # System configs
+│   ├── etc/
+│   │   └── skel/.config/hypr/
+│   │       └── hyprland.conf  # Default Hyprland config
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
 │   │   └── target-packages.x86_64
