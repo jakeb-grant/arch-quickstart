@@ -22,26 +22,19 @@ A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop enviro
 
 ### 1. Boot the ISO
 
-Boot from USB and you'll auto-login to a root shell. You'll see:
+Boot from USB and the installer launches automatically.
 
-```
-================================================================================
-       Hyprland Arch Linux Live Environment
-================================================================================
+#### Booting with Ventoy
 
- To install the Hyprland desktop system, run:
+If using Ventoy, boot the ISO in **GRUB2 mode**:
+1. Select the ISO in Ventoy
+2. Press Enter, then select "Boot in grub2 mode"
 
-   hyprland-install
-================================================================================
-```
+(Normal mode may not work due to ISO boot configuration)
 
-### 2. Run the Installer
+### 2. The Installer
 
-```bash
-hyprland-install
-```
-
-The TUI installer guides you through:
+The TUI installer launches automatically and guides you through:
 
 #### Disk Selection
 - Lists all available disks (NVMe, SATA, etc.)
@@ -49,9 +42,15 @@ The TUI installer guides you through:
 
 #### System Configuration
 - **Machine type**: Select `laptop` or `desktop`
-- **Username**: Pre-filled with `jacob` (configurable)
+- **Username**: Pre-filled with default (configurable)
 - **Password**: Enter and confirm
+- **Disk encryption**: Optional LUKS encryption (can use same password)
 - **Timezone**: Defaults to `America/Denver`
+- **Git config**: Pre-filled, editable
+
+#### Network
+- Auto-detects ethernet connection
+- If no connection, offers WiFi setup with network selection
 
 #### What Gets Created
 
@@ -77,7 +76,7 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 #### System Configuration Applied
 - Locale: `en_US.UTF-8`
 - Keymap: `us`
-- Shell: `zsh`
+- Shell: `bash`
 - Git configured with name/email
 - GRUB bootloader (UEFI)
 - Services enabled: NetworkManager, SDDM
