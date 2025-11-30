@@ -335,6 +335,14 @@ install_base() {
     info "Syncing package databases..."
     pacman -Sy
 
+    # Pre-configure locale in target before package install
+    # Some packages check locale during installation
+    info "Pre-configuring locale..."
+    mkdir -p /mnt/etc
+    echo "$DEFAULT_LOCALE UTF-8" > /mnt/etc/locale.gen
+    echo "LANG=$DEFAULT_LOCALE" > /mnt/etc/locale.conf
+    echo "KEYMAP=$DEFAULT_KEYMAP" > /mnt/etc/vconsole.conf
+
     # Read packages from file
     if [[ -f "$PACKAGES_FILE" ]]; then
         mapfile -t packages < <(grep -v '^#' "$PACKAGES_FILE" | grep -v '^$')
@@ -378,15 +386,9 @@ configure_system() {
     arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
     arch-chroot /mnt hwclock --systohc
 
-    # Locale
-    info "  Configuring locale..."
-    echo "$DEFAULT_LOCALE UTF-8" >> /mnt/etc/locale.gen
+    # Generate locale (config was set before pacstrap)
+    info "  Generating locale..."
     arch-chroot /mnt locale-gen
-    echo "LANG=$DEFAULT_LOCALE" > /mnt/etc/locale.conf
-
-    # Keyboard/Console
-    info "  Configuring keyboard..."
-    echo "KEYMAP=$DEFAULT_KEYMAP" > /mnt/etc/vconsole.conf
 
     # Hostname
     info "  Setting hostname..."
@@ -460,9 +462,7 @@ AURSCRIPT
     chmod +x /mnt/tmp/install-aur.sh
 
     info "Building and installing yay (AUR helper)..."
-    arch-chroot /mnt sudo -u "$USERNAME" /tmp/install-aur.sh 2>&1 | while read -r line; do
-        echo "$line"
-    done
+    arch-chroot /mnt sudo -u "$USERNAME" bash /tmp/install-aur.sh
 
     # Cleanup
     rm -f /mnt/tmp/install-aur.sh
