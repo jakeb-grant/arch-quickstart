@@ -47,7 +47,7 @@ header() {
         --margin "1" \
         --align center \
         --bold \
-        "🌸 Hyprland Arch Installer 🌸"
+        "Hyprland Arch Installer"
     echo
 }
 
@@ -433,7 +433,7 @@ finish() {
         --padding "1 2" \
         --margin "1" \
         --align center \
-        "✨ Installation Complete! ✨"
+        "Installation Complete"
 
     echo
     gum style \
