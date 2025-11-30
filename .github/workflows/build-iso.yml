@@ -24,6 +24,11 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Security: Only run on PRs from the same repo (not forks)
+    # This prevents external users from triggering builds
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     container:
       image: archlinux:latest
       options: --privileged
