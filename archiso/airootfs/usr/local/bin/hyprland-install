@@ -404,6 +404,12 @@ EOF
     arch-chroot /mnt useradd -m -G wheel -s "$DEFAULT_SHELL" "$USERNAME"
     echo "$USERNAME:$PASSWORD" | arch-chroot /mnt chpasswd
 
+    # Copy custom Hyprland config to user's home
+    info "  Installing Hyprland config..."
+    mkdir -p "/mnt/home/$USERNAME/.config/hypr"
+    cp /etc/skel/.config/hypr/hyprland.conf "/mnt/home/$USERNAME/.config/hypr/"
+    arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
+
     # Configure git for user
     if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
         info "  Configuring git..."
