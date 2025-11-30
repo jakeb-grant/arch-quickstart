@@ -279,6 +279,31 @@ configure_user() {
 
     echo
 
+    # Disk encryption
+    ENCRYPT_DISK="no"
+    ENCRYPT_PASSWORD=""
+    info "Disk encryption (LUKS):"
+    if gum confirm --default=false "Enable full disk encryption?"; then
+        ENCRYPT_DISK="yes"
+        if gum confirm "Use the same password for encryption?"; then
+            ENCRYPT_PASSWORD="$PASSWORD"
+        else
+            info "Enter encryption passphrase:"
+            ENCRYPT_PASSWORD=$(gum input --password --placeholder "Encryption passphrase")
+            if [[ -z "$ENCRYPT_PASSWORD" ]]; then
+                die "Encryption passphrase cannot be empty!"
+            fi
+            info "Confirm encryption passphrase:"
+            local encrypt_confirm
+            encrypt_confirm=$(gum input --password --placeholder "Confirm passphrase")
+            if [[ "$ENCRYPT_PASSWORD" != "$encrypt_confirm" ]]; then
+                die "Encryption passphrases do not match!"
+            fi
+        fi
+    fi
+
+    echo
+
     # Timezone - pre-filled with default, option to change
     info "Timezone (default: $DEFAULT_TIMEZONE):"
     if gum confirm "Use default timezone ($DEFAULT_TIMEZONE)?"; then
@@ -300,13 +325,14 @@ configure_user() {
 
     echo
     success "Configuration summary:"
-    echo "  Machine:  $HOSTNAME"
-    echo "  Username: $USERNAME"
-    echo "  Timezone: $TIMEZONE"
-    echo "  Locale:   $DEFAULT_LOCALE"
-    echo "  Keymap:   $DEFAULT_KEYMAP"
+    echo "  Machine:    $HOSTNAME"
+    echo "  Username:   $USERNAME"
+    echo "  Encryption: $ENCRYPT_DISK"
+    echo "  Timezone:   $TIMEZONE"
+    echo "  Locale:     $DEFAULT_LOCALE"
+    echo "  Keymap:     $DEFAULT_KEYMAP"
     if [[ -n "$GIT_USER_NAME" ]]; then
-        echo "  Git user: $GIT_USER_NAME <$GIT_USER_EMAIL>"
+        echo "  Git user:   $GIT_USER_NAME <$GIT_USER_EMAIL>"
     fi
     echo
 
@@ -365,11 +391,26 @@ format_partitions() {
     info "Formatting partitions..."
     echo
 
-    gum spin --spinner dot --title "Formatting EFI partition (FAT32)..." -- \
-        mkfs.fat -F32 "$EFI_PART"
+    info "Formatting EFI partition (FAT32)..."
+    mkfs.fat -F32 "$EFI_PART"
 
-    gum spin --spinner dot --title "Formatting root partition (BTRFS)..." -- \
+    if [[ "$ENCRYPT_DISK" == "yes" ]]; then
+        info "Setting up LUKS encryption..."
+        echo -n "$ENCRYPT_PASSWORD" | cryptsetup luksFormat --type luks2 "$ROOT_PART" -
+
+        info "Opening encrypted container..."
+        echo -n "$ENCRYPT_PASSWORD" | cryptsetup open "$ROOT_PART" cryptroot -
+
+        # Store the mapper device for later use
+        CRYPT_DEVICE="/dev/mapper/cryptroot"
+
+        info "Formatting encrypted partition (BTRFS)..."
+        mkfs.btrfs -f "$CRYPT_DEVICE"
+    else
+        info "Formatting root partition (BTRFS)..."
         mkfs.btrfs -f "$ROOT_PART"
+        CRYPT_DEVICE=""
+    fi
 
     success "Formatting complete!"
     sleep 1
@@ -384,27 +425,34 @@ mount_partitions() {
     info "Mounting partitions..."
     echo
 
+    # Determine which device to mount (encrypted or plain)
+    local mount_device
+    if [[ "$ENCRYPT_DISK" == "yes" ]]; then
+        mount_device="$CRYPT_DEVICE"
+    else
+        mount_device="$ROOT_PART"
+    fi
+
     # Mount root
-    mount "$ROOT_PART" /mnt
+    mount "$mount_device" /mnt
 
     # Create BTRFS subvolumes
-    gum spin --spinner dot --title "Creating BTRFS subvolumes..." -- bash -c '
-        btrfs subvolume create /mnt/@
-        btrfs subvolume create /mnt/@home
-        btrfs subvolume create /mnt/@snapshots
-        btrfs subvolume create /mnt/@var_log
-    '
+    info "Creating BTRFS subvolumes..."
+    btrfs subvolume create /mnt/@
+    btrfs subvolume create /mnt/@home
+    btrfs subvolume create /mnt/@snapshots
+    btrfs subvolume create /mnt/@var_log
 
     # Unmount and remount with subvolumes
     umount /mnt
 
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$ROOT_PART" /mnt
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$mount_device" /mnt
 
     mkdir -p /mnt/{boot/efi,home,.snapshots,var/log}
 
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$ROOT_PART" /mnt/home
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$ROOT_PART" /mnt/.snapshots
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@var_log "$ROOT_PART" /mnt/var/log
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$mount_device" /mnt/home
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$mount_device" /mnt/.snapshots
+    mount -o noatime,compress=zstd,space_cache=v2,subvol=@var_log "$mount_device" /mnt/var/log
 
     mount "$EFI_PART" /mnt/boot/efi
 
@@ -516,6 +564,25 @@ EOF
     # Enable sudo for wheel group
     info "  Configuring sudo..."
     sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
+
+    # Configure encryption if enabled
+    if [[ "$ENCRYPT_DISK" == "yes" ]]; then
+        info "  Configuring disk encryption..."
+
+        # Get UUID of the encrypted partition
+        local crypt_uuid
+        crypt_uuid=$(blkid -s UUID -o value "$ROOT_PART")
+
+        # Add encrypt hook to mkinitcpio
+        sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+
+        # Configure GRUB for encrypted root
+        sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot\"|" /mnt/etc/default/grub
+
+        # Regenerate initramfs
+        info "  Regenerating initramfs..."
+        arch-chroot /mnt mkinitcpio -P
+    fi
 
     # Install bootloader
     info "  Installing GRUB bootloader..."
