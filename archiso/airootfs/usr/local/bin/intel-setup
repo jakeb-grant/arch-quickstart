@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Intel GPU Setup Script for Arch Linux
+# ==============================================================================
+# This script installs hardware video acceleration for Intel GPUs.
+#
+# ==============================================================================
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+
+# --- GPU Detection ---
+INTEL_GPU=$(lspci | grep -iE 'vga|3d|display' | grep -i 'intel' || true)
+
+if [ -z "$INTEL_GPU" ]; then
+    error "No Intel GPU detected. This script is only for Intel hardware."
+fi
+
+info "Intel GPU detected:"
+echo "$INTEL_GPU"
+echo
+
+# Determine which driver to use
+DRIVER_PACKAGE=""
+DRIVER_NAME=""
+
+if [[ "${INTEL_GPU,,}" =~ "hd graphics"|"uhd"|"xe"|"iris" ]]; then
+    # HD Graphics (Broadwell 2014+), UHD, Xe, and Iris use intel-media-driver
+    DRIVER_PACKAGE="intel-media-driver"
+    DRIVER_NAME="intel-media-driver (VA-API for Broadwell+)"
+elif [[ "${INTEL_GPU,,}" =~ "gma" ]]; then
+    # Older GMA generations (2008-2014) use libva-intel-driver
+    DRIVER_PACKAGE="libva-intel-driver"
+    DRIVER_NAME="libva-intel-driver (VA-API for older Intel)"
+else
+    # Default to intel-media-driver for unknown but detected Intel GPUs
+    DRIVER_PACKAGE="intel-media-driver"
+    DRIVER_NAME="intel-media-driver (default for modern Intel)"
+fi
+
+info "Selected driver: $DRIVER_NAME"
+echo
+
+# Confirm before proceeding
+read -p "Install $DRIVER_PACKAGE? [Y/n] " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+    echo "Aborted."
+    exit 0
+fi
+
+# Install the driver
+info "Installing $DRIVER_PACKAGE..."
+sudo pacman -S --needed --noconfirm "$DRIVER_PACKAGE"
+
+# Install additional useful packages
+info "Installing additional VA-API tools..."
+sudo pacman -S --needed --noconfirm libva-utils
+
+echo
+info "Intel GPU setup complete!"
+info "You can verify hardware acceleration with: vainfo"
