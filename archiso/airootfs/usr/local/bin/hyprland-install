@@ -527,6 +527,11 @@ configure_system() {
     info "  Generating fstab..."
     genfstab -U /mnt >> /mnt/etc/fstab
 
+    # Copy pacman.conf with multilib enabled
+    info "  Copying pacman.conf (multilib enabled)..."
+    cp /etc/pacman.conf /mnt/etc/pacman.conf
+    cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+
     # Timezone
     info "  Setting timezone..."
     arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
