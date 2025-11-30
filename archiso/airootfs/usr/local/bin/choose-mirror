@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Configure pacman mirrors using reflector
+
+set -e
+
+COUNTRY="${1:-US}"
+COUNT="${2:-10}"
+
+printf "Configuring mirrors for %s...\n" "$COUNTRY"
+reflector --country "$COUNTRY" --latest "$COUNT" --sort rate --save /etc/pacman.d/mirrorlist
+
+printf "Mirrors updated. Testing...\n"
+pacman -Sy
+
+printf "Done! Mirror configuration complete.\n"

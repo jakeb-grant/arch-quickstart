@@ -1,0 +1,13 @@
+
+================================================================================
+ Welcome to Custom Arch Linux Live!
+================================================================================
+
+ To install Arch Linux, run 'archinstall' for guided installation
+ or follow the Arch Linux Installation Guide.
+
+ For the Installation Guide: 'Installation_guide'
+ To configure mirrors: 'reflector --country US --latest 10 --sort rate --save /etc/pacman.d/mirrorlist'
+
+================================================================================
+
