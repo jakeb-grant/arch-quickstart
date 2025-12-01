@@ -34,9 +34,6 @@ sddm
 waybar
 hyprlock
 hypridle
-hyprpicker
-# awww-git (AUR) - efficient animated wallpaper daemon for Wayland, replacing swww
-# walker (AUR) - installed by installer script
 
 # Wayland support
 xdg-desktop-portal-hyprland
@@ -92,6 +89,7 @@ git
 grim
 slurp
 wl-clipboard
+hyprpicker
 mako
 brightnessctl
 btop

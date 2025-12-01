@@ -903,14 +903,39 @@ install_extras() {
 
 install_aur_packages() {
     header
-    info "Installing AUR packages (Walker launcher)..."
+    info "Installing AUR packages..."
+    echo
+
+    # Read AUR packages from config file (excluding comments and blank lines)
+    local aur_packages_file="/root/aur-packages.x86_64"
+    local aur_packages=()
+
+    if [[ ! -f "$aur_packages_file" ]]; then
+        warn "AUR packages file not found: $aur_packages_file"
+        warn "Skipping AUR package installation"
+        return 0
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and blank lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        aur_packages+=("$line")
+    done < "$aur_packages_file"
+
+    if [[ ${#aur_packages[@]} -eq 0 ]]; then
+        info "No AUR packages to install"
+        return 0
+    fi
+
+    info "Packages to install: ${aur_packages[*]}"
     echo
 
     # Use user's home directory (guaranteed to exist after useradd -m)
     local script_path="/mnt/home/$USERNAME/install-aur.sh"
 
     # Create a script to run as the user for AUR installation
-    cat > "$script_path" << 'AURSCRIPT'
+    cat > "$script_path" << AURSCRIPT
 #!/bin/bash
 set -e
 
@@ -925,15 +950,8 @@ if ! command -v yay &>/dev/null; then
     rm -rf yay-bin
 fi
 
-# Install walker and elephant with providers
-yay -S --noconfirm walker-bin elephant \
-    elephant-desktopapplications \
-    elephant-windows \
-    elephant-clipboard \
-    elephant-calc \
-    elephant-runner \
-    elephant-files \
-    elephant-archlinuxpkgs
+# Install AUR packages
+yay -S --noconfirm ${aur_packages[*]}
 AURSCRIPT
 
     chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
