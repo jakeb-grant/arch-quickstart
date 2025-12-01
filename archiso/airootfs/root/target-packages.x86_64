@@ -32,7 +32,8 @@ intel-ucode
 hyprland
 sddm
 waybar
-# walker (AUR) - installed by installer script
+hyprlock
+hypridle
 
 # Wayland support
 xdg-desktop-portal-hyprland
@@ -88,6 +89,7 @@ git
 grim
 slurp
 wl-clipboard
+hyprpicker
 mako
 brightnessctl
 btop
