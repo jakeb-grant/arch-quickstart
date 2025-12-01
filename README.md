@@ -228,6 +228,10 @@ DEFAULT_KEYMAP="us"
 
 Packages installed on the target system (the full Hyprland desktop). This is the **single source of truth** for target packages—the installer reads from this location.
 
+### `archiso/airootfs/root/aur-packages.x86_64` - AUR Packages
+
+AUR packages installed via yay on the target system. Comments (lines starting with `#`) and blank lines are ignored.
+
 ### `archiso/packages.x86_64` - Live ISO Packages
 
 Packages included in the live environment (for installation/rescue).
@@ -247,7 +251,8 @@ archiso/
 │   │       └── hyprland.conf  # Default Hyprland config
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
-│   │   └── target-packages.x86_64  # Target system packages (single source of truth)
+│   │   ├── target-packages.x86_64  # Target system packages (single source of truth)
+│   │   └── aur-packages.x86_64     # AUR packages installed via yay
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
 │       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
