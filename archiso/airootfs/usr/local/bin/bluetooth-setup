@@ -4,6 +4,10 @@
 # ==============================================================================
 # Installs and enables Bluetooth support with a GUI management tool.
 #
+# Environment variables for chroot-aware operation:
+#   CHROOT_TARGET  - Target mount point (e.g., "/mnt") for installer mode
+#   NONINTERACTIVE - Skip confirmation prompts when set to "1"
+#
 # ==============================================================================
 
 set -e
@@ -18,12 +22,53 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# =============================================================================
+# Chroot-aware helper functions
+# =============================================================================
+
+# Run a command - either directly with sudo, or via arch-chroot
+run_cmd() {
+    if [[ -n "$CHROOT_TARGET" ]]; then
+        arch-chroot "$CHROOT_TARGET" "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+# Install packages
+pkg_install() {
+    run_cmd pacman -S --needed --noconfirm "$@"
+}
+
+# Enable a systemd service
+svc_enable() {
+    run_cmd systemctl enable "$@"
+}
+
+# Start a systemd service (only in non-chroot mode)
+svc_start() {
+    if [[ -z "$CHROOT_TARGET" ]]; then
+        sudo systemctl start "$@"
+    fi
+}
+
+# Get the correct file path (prefixed with CHROOT_TARGET if set)
+target_path() {
+    echo "${CHROOT_TARGET}$1"
+}
+
+# =============================================================================
+# Main Script
+# =============================================================================
+
 info "Bluetooth Setup"
 echo
 
-# Check for Bluetooth hardware
-if ! lsusb | grep -qi bluetooth && ! lspci | grep -qi bluetooth; then
-    warn "No Bluetooth hardware detected. Proceeding anyway..."
+# Check for Bluetooth hardware (only in non-chroot mode)
+if [[ -z "$CHROOT_TARGET" ]]; then
+    if ! lsusb | grep -qi bluetooth && ! lspci | grep -qi bluetooth; then
+        warn "No Bluetooth hardware detected. Proceeding anyway..."
+    fi
 fi
 
 # Packages to install
@@ -39,28 +84,39 @@ for pkg in "${PACKAGES[@]}"; do
 done
 echo
 
-read -p "Continue? [Y/n] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Nn]$ ]]; then
-    echo "Aborted."
-    exit 0
+# Skip confirmation in non-interactive mode
+if [[ "$NONINTERACTIVE" != "1" ]]; then
+    read -p "Continue? [Y/n] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
 # Install packages
 info "Installing Bluetooth packages..."
-sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"
+pkg_install "${PACKAGES[@]}"
 
 # Enable and start the Bluetooth service
 info "Enabling Bluetooth service..."
-sudo systemctl enable bluetooth.service
-sudo systemctl start bluetooth.service
+svc_enable bluetooth.service
+svc_start bluetooth.service
 
 # Auto-power on Bluetooth adapter
 info "Configuring Bluetooth to auto-power on..."
-sudo sed -i 's/#AutoEnable=false/AutoEnable=true/' /etc/bluetooth/main.conf 2>/dev/null || \
-    echo "AutoEnable=true" | sudo tee -a /etc/bluetooth/main.conf >/dev/null
+BLUETOOTH_CONF="$(target_path /etc/bluetooth/main.conf)"
+if [[ -f "$BLUETOOTH_CONF" ]]; then
+    sed -i 's/#AutoEnable=false/AutoEnable=true/' "$BLUETOOTH_CONF"
+    # If the setting doesn't exist, add it
+    if ! grep -q "^AutoEnable=true" "$BLUETOOTH_CONF"; then
+        echo "AutoEnable=true" >> "$BLUETOOTH_CONF"
+    fi
+fi
 
 echo
 info "Bluetooth setup complete!"
-info "You can use 'blueman-manager' for GUI or 'bluetoothctl' for CLI."
-info "To pair a device: bluetoothctl -> scan on -> pair <MAC> -> connect <MAC>"
+if [[ -z "$CHROOT_TARGET" ]]; then
+    info "You can use 'blueman-manager' for GUI or 'bluetoothctl' for CLI."
+    info "To pair a device: bluetoothctl -> scan on -> pair <MAC> -> connect <MAC>"
+fi

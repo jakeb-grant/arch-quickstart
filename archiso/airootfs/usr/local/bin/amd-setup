@@ -11,6 +11,13 @@
 #
 # If you have AMD iGPU + NVIDIA dGPU, use nvidia-setup instead!
 #
+# Environment variables for chroot-aware operation:
+#   CHROOT_TARGET   - Target mount point (e.g., "/mnt") for installer mode
+#   CHROOT_USER     - Username to configure (for hyprland.conf)
+#   NONINTERACTIVE  - Skip confirmation prompts when set to "1"
+#   DETECTED_AMD    - Pre-detected AMD GPU info (skips detection)
+#   DETECTED_NVIDIA - Pre-detected NVIDIA GPU info (for hybrid warning)
+#
 # ==============================================================================
 
 set -e
@@ -27,27 +34,57 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 
+# =============================================================================
+# Chroot-aware helper functions
+# =============================================================================
+
+run_cmd() {
+    if [[ -n "$CHROOT_TARGET" ]]; then
+        arch-chroot "$CHROOT_TARGET" "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+pkg_install() {
+    run_cmd pacman -S --needed --noconfirm "$@"
+}
+
+target_path() {
+    echo "${CHROOT_TARGET}$1"
+}
+
+get_user_home() {
+    if [[ -n "$CHROOT_USER" ]]; then
+        echo "${CHROOT_TARGET}/home/$CHROOT_USER"
+    elif [[ -n "$SUDO_USER" ]]; then
+        echo "/home/$SUDO_USER"
+    else
+        echo "$HOME"
+    fi
+}
+
 # ==============================================================================
 # GPU Detection
 # ==============================================================================
 header "Detecting Graphics Hardware"
 
-# Get all GPU info
-ALL_GPUS=$(lspci | grep -iE 'vga|3d|display' || true)
-
-# Detect GPUs
-AMD_GPU=$(echo "$ALL_GPUS" | grep -iE 'amd|radeon|ati' | head -1 || true)
-NVIDIA_GPU=$(echo "$ALL_GPUS" | grep -i 'nvidia' | head -1 || true)
-INTEL_GPU=$(echo "$ALL_GPUS" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe)' | head -1 || true)
+# Use pre-detected GPUs if provided, otherwise detect
+if [[ -z "$DETECTED_AMD" ]]; then
+    ALL_GPUS=$(lspci | grep -iE 'vga|3d|display' || true)
+    DETECTED_AMD=$(echo "$ALL_GPUS" | grep -iE 'amd|radeon|ati' | head -1 || true)
+    DETECTED_NVIDIA=$(echo "$ALL_GPUS" | grep -i 'nvidia' | head -1 || true)
+    DETECTED_INTEL=$(echo "$ALL_GPUS" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe)' | head -1 || true)
+fi
 
 # --- Check for hybrid setup with NVIDIA ---
-if [ -n "$NVIDIA_GPU" ]; then
+if [[ -n "$DETECTED_NVIDIA" ]] && [[ "$NONINTERACTIVE" != "1" ]]; then
     echo ""
     warn "NVIDIA GPU detected alongside AMD!"
     echo ""
     echo "Detected GPUs:"
-    echo "  AMD:    $AMD_GPU"
-    echo "  NVIDIA: $NVIDIA_GPU"
+    echo "  AMD:    $DETECTED_AMD"
+    echo "  NVIDIA: $DETECTED_NVIDIA"
     echo ""
     warn "For AMD iGPU + NVIDIA dGPU (hybrid graphics):"
     warn "  Run 'nvidia-setup' instead - it handles hybrid configurations."
@@ -63,17 +100,17 @@ if [ -n "$NVIDIA_GPU" ]; then
 fi
 
 # --- Validate AMD GPU exists ---
-if [ -z "$AMD_GPU" ]; then
+if [[ -z "$DETECTED_AMD" ]]; then
     echo ""
     warn "No AMD GPU detected!"
     echo ""
     echo "Detected GPUs:"
-    echo "$ALL_GPUS" | sed 's/^/  /'
+    lspci | grep -iE 'vga|3d|display' | sed 's/^/  /' || echo "  None found"
     echo ""
 
-    if [ -n "$NVIDIA_GPU" ]; then
+    if [[ -n "$DETECTED_NVIDIA" ]]; then
         info "NVIDIA GPU detected. Run 'nvidia-setup' instead."
-    elif [ -n "$INTEL_GPU" ]; then
+    elif [[ -n "$DETECTED_INTEL" ]]; then
         info "Intel GPU detected. Run 'intel-setup' instead."
     fi
     exit 1
@@ -81,11 +118,11 @@ fi
 
 # --- Display detected hardware ---
 info "AMD GPU detected:"
-echo "  $AMD_GPU"
+echo "  $DETECTED_AMD"
 
 # Determine GPU type
 GPU_TYPE="discrete"
-if echo "$AMD_GPU" | grep -qiE 'Radeon Graphics$|Ryzen.*Radeon|Renoir|Cezanne|Barcelo|Phoenix|Rembrandt|Lucienne|Mendocino'; then
+if echo "$DETECTED_AMD" | grep -qiE 'Radeon Graphics$|Ryzen.*Radeon|Renoir|Cezanne|Barcelo|Phoenix|Rembrandt|Lucienne|Mendocino'; then
     GPU_TYPE="integrated"
     info "This appears to be an AMD APU (integrated graphics)"
 else
@@ -131,11 +168,13 @@ echo ""
 # ==============================================================================
 # Confirmation
 # ==============================================================================
-read -p "Continue with installation? [Y/n] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Nn]$ ]]; then
-    echo "Aborted."
-    exit 0
+if [[ "$NONINTERACTIVE" != "1" ]]; then
+    read -p "Continue with installation? [Y/n] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
 # ==============================================================================
@@ -144,43 +183,39 @@ fi
 header "Installing Packages"
 
 # Check if multilib is enabled (required for lib32 packages)
-if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+PACMAN_CONF="$(target_path /etc/pacman.conf)"
+if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
     warn "Multilib repository is not enabled!"
     info "Enabling multilib repository for 32-bit support..."
 
-    # Enable multilib by uncommenting the section
-    sudo sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+    sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$PACMAN_CONF"
 
-    # Verify it was enabled
-    if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+    if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
         warn "Could not auto-enable multilib. Adding it manually..."
-        echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf >/dev/null
+        echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> "$PACMAN_CONF"
     fi
 
     info "Multilib repository enabled"
 fi
 
 info "Updating package database..."
-if ! sudo pacman -Syu --noconfirm; then
-    error "Failed to update package database!"
-fi
+run_cmd pacman -Syu --noconfirm
 
 info "Installing AMD GPU packages..."
-if ! sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"; then
-    echo ""
-    error "Failed to install AMD GPU packages! Check the output above for details."
-fi
+pkg_install "${PACKAGES[@]}"
 
 # ==============================================================================
-# ROCm (Optional)
+# ROCm (Optional) - only in interactive mode
 # ==============================================================================
-echo ""
-read -p "Install ROCm for GPU compute (OpenCL, HIP)? [y/N] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    header "Installing ROCm"
-    info "Installing ROCm packages..."
-    sudo pacman -S --needed --noconfirm rocm-opencl-runtime rocm-hip-runtime
+if [[ "$NONINTERACTIVE" != "1" ]] && [[ -z "$CHROOT_TARGET" ]]; then
+    echo ""
+    read -p "Install ROCm for GPU compute (OpenCL, HIP)? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        header "Installing ROCm"
+        info "Installing ROCm packages..."
+        pkg_install rocm-opencl-runtime rocm-hip-runtime
+    fi
 fi
 
 # ==============================================================================
@@ -188,8 +223,10 @@ fi
 # ==============================================================================
 header "Configuring Hyprland Environment"
 
-HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
-if [ -f "$HYPRLAND_CONF" ]; then
+USER_HOME="$(get_user_home)"
+HYPRLAND_CONF="$USER_HOME/.config/hypr/hyprland.conf"
+
+if [[ -f "$HYPRLAND_CONF" ]]; then
     if grep -q "AMD environment" "$HYPRLAND_CONF"; then
         warn "AMD environment variables already present in hyprland.conf"
     else
@@ -221,15 +258,18 @@ header "Setup Complete"
 
 info "AMD GPU setup complete!"
 echo ""
-echo "Verification commands:"
-echo "  vulkaninfo --summary      - Check Vulkan support"
-echo "  vainfo                    - Check VA-API (video acceleration)"
-echo "  glxinfo | grep renderer   - Check OpenGL renderer"
-echo ""
 
-if [ "$GPU_TYPE" = "integrated" ]; then
-    echo "APU Notes:"
-    echo "  - Your AMD APU handles all graphics"
-    echo "  - No discrete GPU switching needed"
-    echo "  - Power efficient for laptop use"
+if [[ -z "$CHROOT_TARGET" ]]; then
+    echo "Verification commands:"
+    echo "  vulkaninfo --summary      - Check Vulkan support"
+    echo "  vainfo                    - Check VA-API (video acceleration)"
+    echo "  glxinfo | grep renderer   - Check OpenGL renderer"
+    echo ""
+
+    if [[ "$GPU_TYPE" == "integrated" ]]; then
+        echo "APU Notes:"
+        echo "  - Your AMD APU handles all graphics"
+        echo "  - No discrete GPU switching needed"
+        echo "  - Power efficient for laptop use"
+    fi
 fi
