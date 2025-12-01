@@ -74,7 +74,7 @@ jobs:
 
           # Validate target system packages
           echo ""
-          echo "Validating packages in archiso/target-packages.x86_64 (installed system)..."
+          echo "Validating packages in archiso/airootfs/root/target-packages.x86_64 (installed system)..."
           while IFS= read -r package; do
             # Skip empty lines and comments
             if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
@@ -88,7 +88,7 @@ jobs:
             else
               echo "✓ Valid package: $package"
             fi
-          done < archiso/target-packages.x86_64
+          done < archiso/airootfs/root/target-packages.x86_64
 
           if [[ -n "$INVALID_PACKAGES" ]]; then
             echo ""

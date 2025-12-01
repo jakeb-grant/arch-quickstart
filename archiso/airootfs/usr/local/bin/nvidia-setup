@@ -11,6 +11,14 @@
 # - Hybrid graphics (AMD iGPU + NVIDIA dGPU)
 # - PRIME render offloading for hybrid setups
 #
+# Environment variables for chroot-aware operation:
+#   CHROOT_TARGET   - Target mount point (e.g., "/mnt") for installer mode
+#   CHROOT_USER     - Username to configure (for hyprland.conf)
+#   NONINTERACTIVE  - Skip confirmation prompts when set to "1"
+#   DETECTED_NVIDIA - Pre-detected NVIDIA GPU info (skips detection)
+#   DETECTED_INTEL  - Pre-detected Intel GPU info (for hybrid detection)
+#   DETECTED_AMD    - Pre-detected AMD GPU info (for hybrid detection)
+#
 # ==============================================================================
 
 set -e
@@ -27,46 +35,71 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 header() { echo -e "\n${CYAN}=== $1 ===${NC}\n"; }
 
+# =============================================================================
+# Chroot-aware helper functions
+# =============================================================================
+
+run_cmd() {
+    if [[ -n "$CHROOT_TARGET" ]]; then
+        arch-chroot "$CHROOT_TARGET" "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+pkg_install() {
+    run_cmd pacman -S --needed --noconfirm "$@"
+}
+
+target_path() {
+    echo "${CHROOT_TARGET}$1"
+}
+
+# Get the user's home directory path
+get_user_home() {
+    if [[ -n "$CHROOT_USER" ]]; then
+        echo "${CHROOT_TARGET}/home/$CHROOT_USER"
+    elif [[ -n "$SUDO_USER" ]]; then
+        echo "/home/$SUDO_USER"
+    else
+        echo "$HOME"
+    fi
+}
+
 # ==============================================================================
 # GPU Detection
 # ==============================================================================
 header "Detecting Graphics Hardware"
 
-# Get all GPU info
-ALL_GPUS=$(lspci | grep -iE 'vga|3d|display' || true)
-
-# Detect NVIDIA GPU
-NVIDIA_GPU=$(echo "$ALL_GPUS" | grep -i 'nvidia' | head -1 || true)
-
-# Detect Intel GPU (integrated)
-INTEL_GPU=$(echo "$ALL_GPUS" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe)' | head -1 || true)
-
-# Detect AMD GPU - need to determine if it's a dGPU or iGPU
-# AMD APUs (integrated): Ryzen with Radeon Graphics, AMD Radeon Graphics
-# AMD dGPUs: RX series, Radeon Pro, etc.
-AMD_GPU=$(echo "$ALL_GPUS" | grep -iE 'amd|radeon|ati' | head -1 || true)
+# Use pre-detected GPUs if provided via environment, otherwise detect
+if [[ -z "$DETECTED_NVIDIA" ]]; then
+    ALL_GPUS=$(lspci | grep -iE 'vga|3d|display' || true)
+    DETECTED_NVIDIA=$(echo "$ALL_GPUS" | grep -i 'nvidia' | head -1 || true)
+    DETECTED_INTEL=$(echo "$ALL_GPUS" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe)' | head -1 || true)
+    DETECTED_AMD=$(echo "$ALL_GPUS" | grep -iE 'amd|radeon|ati' | head -1 || true)
+fi
 
 # Check if AMD GPU is an APU (integrated) or discrete
 AMD_IS_IGPU=false
-if [ -n "$AMD_GPU" ]; then
+if [[ -n "$DETECTED_AMD" ]]; then
     # APU indicators: "Radeon Graphics" (without RX/Pro), "Vega" integrated, Ryzen integrated
-    if echo "$AMD_GPU" | grep -qiE 'Radeon Graphics$|Ryzen.*Radeon|Renoir|Cezanne|Barcelo|Phoenix|Rembrandt|Lucienne|Mendocino'; then
+    if echo "$DETECTED_AMD" | grep -qiE 'Radeon Graphics$|Ryzen.*Radeon|Renoir|Cezanne|Barcelo|Phoenix|Rembrandt|Lucienne|Mendocino'; then
         AMD_IS_IGPU=true
     fi
 fi
 
 # --- Validate NVIDIA GPU exists ---
-if [ -z "$NVIDIA_GPU" ]; then
+if [[ -z "$DETECTED_NVIDIA" ]]; then
     echo ""
     warn "No NVIDIA GPU detected!"
     echo ""
     echo "Detected GPUs:"
-    echo "$ALL_GPUS" | sed 's/^/  /'
+    lspci | grep -iE 'vga|3d|display' | sed 's/^/  /' || echo "  None found"
     echo ""
 
-    if [ -n "$AMD_GPU" ]; then
+    if [[ -n "$DETECTED_AMD" ]]; then
         info "AMD GPU detected. Run 'amd-setup' instead."
-    elif [ -n "$INTEL_GPU" ]; then
+    elif [[ -n "$DETECTED_INTEL" ]]; then
         info "Intel GPU detected. Run 'intel-setup' instead."
     fi
     exit 1
@@ -74,25 +107,25 @@ fi
 
 # --- Display detected hardware ---
 info "NVIDIA GPU detected:"
-echo "  $NVIDIA_GPU"
+echo "  $DETECTED_NVIDIA"
 
 # Determine hybrid setup type
 HYBRID_TYPE=""
-if [ -n "$INTEL_GPU" ]; then
+if [[ -n "$DETECTED_INTEL" ]]; then
     HYBRID_TYPE="intel"
     info "Intel iGPU detected (hybrid graphics):"
-    echo "  $INTEL_GPU"
-elif [ -n "$AMD_GPU" ] && [ "$AMD_IS_IGPU" = true ]; then
+    echo "  $DETECTED_INTEL"
+elif [[ -n "$DETECTED_AMD" ]] && [[ "$AMD_IS_IGPU" == "true" ]]; then
     HYBRID_TYPE="amd"
     info "AMD iGPU/APU detected (hybrid graphics):"
-    echo "  $AMD_GPU"
-elif [ -n "$AMD_GPU" ] && [ "$AMD_IS_IGPU" = false ]; then
+    echo "  $DETECTED_AMD"
+elif [[ -n "$DETECTED_AMD" ]] && [[ "$AMD_IS_IGPU" == "false" ]]; then
     warn "AMD discrete GPU also detected - multi-GPU setup:"
-    echo "  $AMD_GPU"
+    echo "  $DETECTED_AMD"
     warn "This script will configure NVIDIA. AMD dGPU may need separate config."
 fi
 
-if [ -z "$HYBRID_TYPE" ]; then
+if [[ -z "$HYBRID_TYPE" ]]; then
     info "Dedicated NVIDIA setup (no integrated GPU detected)"
 fi
 
@@ -102,8 +135,6 @@ fi
 header "Selecting Driver Package"
 
 # Determine GPU generation from lspci output
-# We need to parse the GPU name to determine which driver to use
-#
 # nvidia-open-dkms (open kernel modules) - REQUIRED or recommended for:
 #   - Blackwell (50xx series) - REQUIRED
 #   - Ada Lovelace (40xx series) - recommended
@@ -118,31 +149,31 @@ header "Selecting Driver Package"
 NVIDIA_DRIVER_PACKAGE="nvidia-dkms"  # Default to proprietary
 
 # Check for Blackwell (50xx) - REQUIRES open modules
-if echo "$NVIDIA_GPU" | grep -qiE 'RTX.*(50[0-9][0-9]|5090|5080|5070|5060|5050)'; then
+if echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(50[0-9][0-9]|5090|5080|5070|5060|5050)'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
     info "Detected Blackwell (50xx) GPU - nvidia-open-dkms REQUIRED"
 # Check for Ada Lovelace (40xx)
-elif echo "$NVIDIA_GPU" | grep -qiE 'RTX.*(40[0-9][0-9]|4090|4080|4070|4060|4050)'; then
+elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(40[0-9][0-9]|4090|4080|4070|4060|4050)'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
     info "Detected Ada Lovelace (40xx) GPU - using nvidia-open-dkms (recommended)"
 # Check for Ampere (30xx)
-elif echo "$NVIDIA_GPU" | grep -qiE 'RTX.*(30[0-9][0-9]|3090|3080|3070|3060|3050)'; then
+elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(30[0-9][0-9]|3090|3080|3070|3060|3050)'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
     info "Detected Ampere (30xx) GPU - using nvidia-open-dkms (recommended)"
 # Check for Turing (20xx and GTX 16xx)
-elif echo "$NVIDIA_GPU" | grep -qiE 'RTX.*(20[0-9][0-9]|2080|2070|2060)|GTX.*(16[0-9][0-9]|1660|1650|1630)'; then
+elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(20[0-9][0-9]|2080|2070|2060)|GTX.*(16[0-9][0-9]|1660|1650|1630)'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
     info "Detected Turing (20xx/16xx) GPU - using nvidia-open-dkms (recommended)"
 # Check for Pascal (10xx) - uses proprietary
-elif echo "$NVIDIA_GPU" | grep -qiE 'GTX.*(10[0-9][0-9]|1080|1070|1060|1050|1030)|GT.?10[0-9][0-9]'; then
+elif echo "$DETECTED_NVIDIA" | grep -qiE 'GTX.*(10[0-9][0-9]|1080|1070|1060|1050|1030)|GT.?10[0-9][0-9]'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
     info "Detected Pascal (10xx) GPU - using nvidia-dkms"
 # Check for Maxwell (9xx) - uses proprietary
-elif echo "$NVIDIA_GPU" | grep -qiE 'GTX.*(9[0-9][0-9]|980|970|960|950)|GT.?9[0-9][0-9]'; then
+elif echo "$DETECTED_NVIDIA" | grep -qiE 'GTX.*(9[0-9][0-9]|980|970|960|950)|GT.?9[0-9][0-9]'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
     info "Detected Maxwell (9xx) GPU - using nvidia-dkms"
 # Fallback for unrecognized but modern-looking GPUs
-elif echo "$NVIDIA_GPU" | grep -qiE 'RTX'; then
+elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX'; then
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
     info "Detected RTX GPU - using nvidia-open-dkms (recommended for RTX)"
 else
@@ -152,22 +183,30 @@ fi
 
 # Check which kernel is installed and set appropriate headers package
 KERNEL_HEADERS="linux-headers"  # Default
-DETECTED_KERNEL="linux"
 
-if pacman -Q linux-zen &>/dev/null; then
-    KERNEL_HEADERS="linux-zen-headers"
-    DETECTED_KERNEL="linux-zen"
-    info "Detected linux-zen kernel"
-elif pacman -Q linux-lts &>/dev/null; then
-    KERNEL_HEADERS="linux-lts-headers"
-    DETECTED_KERNEL="linux-lts"
-    info "Detected linux-lts kernel"
-elif pacman -Q linux-hardened &>/dev/null; then
-    KERNEL_HEADERS="linux-hardened-headers"
-    DETECTED_KERNEL="linux-hardened"
-    info "Detected linux-hardened kernel"
+if [[ -z "$CHROOT_TARGET" ]]; then
+    # Running on live system - check installed kernels
+    if pacman -Q linux-zen &>/dev/null; then
+        KERNEL_HEADERS="linux-zen-headers"
+        info "Detected linux-zen kernel"
+    elif pacman -Q linux-lts &>/dev/null; then
+        KERNEL_HEADERS="linux-lts-headers"
+        info "Detected linux-lts kernel"
+    elif pacman -Q linux-hardened &>/dev/null; then
+        KERNEL_HEADERS="linux-hardened-headers"
+        info "Detected linux-hardened kernel"
+    else
+        info "Using default linux kernel headers"
+    fi
 else
-    info "Using default linux kernel headers"
+    # In chroot - check target system
+    if run_cmd pacman -Q linux-zen &>/dev/null 2>&1; then
+        KERNEL_HEADERS="linux-zen-headers"
+    elif run_cmd pacman -Q linux-lts &>/dev/null 2>&1; then
+        KERNEL_HEADERS="linux-lts-headers"
+    elif run_cmd pacman -Q linux-hardened &>/dev/null 2>&1; then
+        KERNEL_HEADERS="linux-hardened-headers"
+    fi
 fi
 
 # ==============================================================================
@@ -176,12 +215,12 @@ fi
 header "Installation Summary"
 
 echo "Hardware detected:"
-echo "  - NVIDIA GPU: $(echo "$NVIDIA_GPU" | sed 's/.*: //')"
-if [ -n "$HYBRID_TYPE" ]; then
-    if [ "$HYBRID_TYPE" = "intel" ]; then
-        echo "  - Intel iGPU: $(echo "$INTEL_GPU" | sed 's/.*: //')"
+echo "  - NVIDIA GPU: $(echo "$DETECTED_NVIDIA" | sed 's/.*: //')"
+if [[ -n "$HYBRID_TYPE" ]]; then
+    if [[ "$HYBRID_TYPE" == "intel" ]]; then
+        echo "  - Intel iGPU: $(echo "$DETECTED_INTEL" | sed 's/.*: //')"
     else
-        echo "  - AMD iGPU: $(echo "$AMD_GPU" | sed 's/.*: //')"
+        echo "  - AMD iGPU: $(echo "$DETECTED_AMD" | sed 's/.*: //')"
     fi
     echo "  - Setup type: Hybrid (PRIME offloading)"
 else
@@ -198,17 +237,19 @@ echo "System modifications:"
 echo "  - /etc/modprobe.d/nvidia.conf (DRM modeset)"
 echo "  - /etc/mkinitcpio.conf (early KMS modules)"
 echo "  - ~/.config/hypr/hyprland.conf (environment variables)"
-if [ -n "$HYBRID_TYPE" ]; then
+if [[ -n "$HYBRID_TYPE" ]]; then
     echo "  - /usr/local/bin/prime-run (PRIME wrapper script)"
 fi
 
-echo ""
-warn "This will modify system configuration files."
-read -p "Continue? [y/N] " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Aborted."
-    exit 0
+if [[ "$NONINTERACTIVE" != "1" ]]; then
+    echo ""
+    warn "This will modify system configuration files."
+    read -p "Continue? [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
 # ==============================================================================
@@ -217,26 +258,25 @@ fi
 header "Installing Packages"
 
 # Check if multilib is enabled (required for lib32 packages)
-if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+PACMAN_CONF="$(target_path /etc/pacman.conf)"
+if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
     warn "Multilib repository is not enabled!"
     info "Enabling multilib repository for 32-bit support..."
 
     # Enable multilib by uncommenting the section
-    sudo sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+    sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$PACMAN_CONF"
 
     # Verify it was enabled
-    if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+    if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
         warn "Could not auto-enable multilib. Adding it manually..."
-        echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" | sudo tee -a /etc/pacman.conf >/dev/null
+        echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> "$PACMAN_CONF"
     fi
 
     info "Multilib repository enabled"
 fi
 
 info "Updating package database..."
-if ! sudo pacman -Syu --noconfirm; then
-    error "Failed to update package database!"
-fi
+run_cmd pacman -Syu --noconfirm
 
 PACKAGES_TO_INSTALL=(
     "${KERNEL_HEADERS}"
@@ -254,10 +294,7 @@ info "Installing NVIDIA packages..."
 echo "  Packages: ${PACKAGES_TO_INSTALL[*]}"
 echo ""
 
-if ! sudo pacman -S --needed --noconfirm "${PACKAGES_TO_INSTALL[@]}"; then
-    echo ""
-    error "Failed to install NVIDIA packages! Check the output above for details."
-fi
+pkg_install "${PACKAGES_TO_INSTALL[@]}"
 
 # ==============================================================================
 # Modprobe Configuration
@@ -265,26 +302,26 @@ fi
 header "Configuring Kernel Modules"
 
 info "Creating /etc/modprobe.d/nvidia.conf..."
-echo "options nvidia_drm modeset=1" | sudo tee /etc/modprobe.d/nvidia.conf >/dev/null
+echo "options nvidia_drm modeset=1" > "$(target_path /etc/modprobe.d/nvidia.conf)"
 
 # ==============================================================================
 # Mkinitcpio Configuration
 # ==============================================================================
-MKINITCPIO_CONF="/etc/mkinitcpio.conf"
+MKINITCPIO_CONF="$(target_path /etc/mkinitcpio.conf)"
 
 # Create backup with timestamp
 BACKUP_FILE="${MKINITCPIO_CONF}.backup.$(date +%Y%m%d%H%M%S)"
 info "Backing up mkinitcpio.conf to $BACKUP_FILE..."
-sudo cp "$MKINITCPIO_CONF" "$BACKUP_FILE"
+cp "$MKINITCPIO_CONF" "$BACKUP_FILE"
 
 # Build modules list based on hybrid type
 # Critical: For Intel hybrid, i915 MUST come BEFORE nvidia modules
 # This prevents Electron/Chromium apps from stalling up to 1 minute on boot
-if [ "$HYBRID_TYPE" = "intel" ]; then
+if [[ "$HYBRID_TYPE" == "intel" ]]; then
     MODULES_TO_ADD="i915 nvidia nvidia_modeset nvidia_uvm nvidia_drm"
     info "Intel hybrid: adding i915 BEFORE NVIDIA modules"
     info "  (Prevents Electron/Chromium boot stalling)"
-elif [ "$HYBRID_TYPE" = "amd" ]; then
+elif [[ "$HYBRID_TYPE" == "amd" ]]; then
     MODULES_TO_ADD="amdgpu nvidia nvidia_modeset nvidia_uvm nvidia_drm"
     info "AMD hybrid: adding amdgpu BEFORE NVIDIA modules"
 else
@@ -294,25 +331,25 @@ fi
 
 # Remove any existing nvidia/igpu modules to prevent duplicates
 info "Configuring mkinitcpio for early KMS..."
-sudo sed -i -E 's/ ?nvidia_drm//g; s/ ?nvidia_uvm//g; s/ ?nvidia_modeset//g; s/ ?nvidia( |$)/ /g; s/ ?i915//g; s/ ?amdgpu//g;' "$MKINITCPIO_CONF"
+sed -i -E 's/ ?nvidia_drm//g; s/ ?nvidia_uvm//g; s/ ?nvidia_modeset//g; s/ ?nvidia( |$)/ /g; s/ ?i915//g; s/ ?amdgpu//g;' "$MKINITCPIO_CONF"
 
 # Add modules at the start of the MODULES array
-sudo sed -i -E "s/^(MODULES=\\()/\\1${MODULES_TO_ADD} /" "$MKINITCPIO_CONF"
+sed -i -E "s/^(MODULES=\\()/\\1${MODULES_TO_ADD} /" "$MKINITCPIO_CONF"
 
 # Clean up formatting
-sudo sed -i -E 's/MODULES=\( +/MODULES=(/g; s/  +/ /g; s/ \)/)/g' "$MKINITCPIO_CONF"
+sed -i -E 's/MODULES=\( +/MODULES=(/g; s/  +/ /g; s/ \)/)/g' "$MKINITCPIO_CONF"
 
 info "Regenerating initramfs..."
-sudo mkinitcpio -P
+run_cmd mkinitcpio -P
 
 # ==============================================================================
 # PRIME Offloading (Hybrid Graphics Only)
 # ==============================================================================
-if [ -n "$HYBRID_TYPE" ]; then
+if [[ -n "$HYBRID_TYPE" ]]; then
     header "Setting Up PRIME Offloading"
 
     info "Creating /usr/local/bin/prime-run wrapper..."
-    sudo tee /usr/local/bin/prime-run >/dev/null <<'EOF'
+    cat > "$(target_path /usr/local/bin/prime-run)" <<'EOF'
 #!/bin/bash
 # ==============================================================================
 # PRIME Render Offload Wrapper
@@ -335,7 +372,7 @@ export __VK_LAYER_NV_optimus=NVIDIA_only
 
 exec "$@"
 EOF
-    sudo chmod +x /usr/local/bin/prime-run
+    chmod +x "$(target_path /usr/local/bin/prime-run)"
 
     info "prime-run wrapper installed!"
     echo "  Usage: prime-run <application>"
@@ -347,8 +384,10 @@ fi
 # ==============================================================================
 header "Configuring Hyprland Environment"
 
-HYPRLAND_CONF="$HOME/.config/hypr/hyprland.conf"
-if [ -f "$HYPRLAND_CONF" ]; then
+USER_HOME="$(get_user_home)"
+HYPRLAND_CONF="$USER_HOME/.config/hypr/hyprland.conf"
+
+if [[ -f "$HYPRLAND_CONF" ]]; then
     # Check if NVIDIA config already exists
     if grep -q "NVIDIA environment variables" "$HYPRLAND_CONF"; then
         warn "NVIDIA environment variables already present in hyprland.conf"
@@ -356,7 +395,7 @@ if [ -f "$HYPRLAND_CONF" ]; then
     else
         info "Adding NVIDIA environment variables to hyprland.conf..."
 
-        if [ -n "$HYBRID_TYPE" ]; then
+        if [[ -n "$HYBRID_TYPE" ]]; then
             # Hybrid graphics configuration
             cat >>"$HYPRLAND_CONF" <<'EOF'
 
@@ -399,7 +438,7 @@ else
     echo "  env = __GLX_VENDOR_LIBRARY_NAME,nvidia"
     echo "  env = NVD_BACKEND,direct"
     echo "  env = ELECTRON_OZONE_PLATFORM_HINT,auto"
-    if [ -n "$HYBRID_TYPE" ]; then
+    if [[ -n "$HYBRID_TYPE" ]]; then
         echo ""
         echo "  # For multi-monitor issues on hybrid graphics:"
         echo "  # env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
@@ -413,30 +452,33 @@ header "Setup Complete"
 
 info "NVIDIA setup complete!"
 echo ""
-echo "Verification steps after reboot:"
-echo "  1. nvidia-smi                                      - Check driver loaded"
-echo "  2. cat /sys/module/nvidia_drm/parameters/modeset   - Should return 'Y'"
-if [ -n "$HYBRID_TYPE" ]; then
-    echo "  3. prime-run glxinfo | grep 'OpenGL renderer'      - Test PRIME offload"
-fi
-echo ""
 
-if [ -n "$HYBRID_TYPE" ]; then
-    echo "Hybrid graphics usage:"
-    echo "  - Apps run on ${HYBRID_TYPE} iGPU by default (power saving)"
-    echo "  - Use 'prime-run <app>' to run on NVIDIA dGPU"
-    echo "  - Example: prime-run steam"
+if [[ -z "$CHROOT_TARGET" ]]; then
+    echo "Verification steps after reboot:"
+    echo "  1. nvidia-smi                                      - Check driver loaded"
+    echo "  2. cat /sys/module/nvidia_drm/parameters/modeset   - Should return 'Y'"
+    if [[ -n "$HYBRID_TYPE" ]]; then
+        echo "  3. prime-run glxinfo | grep 'OpenGL renderer'      - Test PRIME offload"
+    fi
     echo ""
-    echo "Troubleshooting:"
-    echo "  - Multi-monitor issues? Try: env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
-    echo "  - Electron apps slow to start? Verify i915/amdgpu is BEFORE nvidia in mkinitcpio"
-    echo ""
-fi
 
-warn "A reboot is required for changes to take effect."
-echo ""
-read -p "Reboot now? [y/N] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    sudo reboot
+    if [[ -n "$HYBRID_TYPE" ]]; then
+        echo "Hybrid graphics usage:"
+        echo "  - Apps run on ${HYBRID_TYPE} iGPU by default (power saving)"
+        echo "  - Use 'prime-run <app>' to run on NVIDIA dGPU"
+        echo "  - Example: prime-run steam"
+        echo ""
+        echo "Troubleshooting:"
+        echo "  - Multi-monitor issues? Try: env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
+        echo "  - Electron apps slow to start? Verify i915/amdgpu is BEFORE nvidia in mkinitcpio"
+        echo ""
+    fi
+
+    warn "A reboot is required for changes to take effect."
+    echo ""
+    read -p "Reboot now? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        sudo reboot
+    fi
 fi

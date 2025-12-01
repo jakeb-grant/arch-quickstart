@@ -342,6 +342,140 @@ configure_user() {
 }
 
 # -----------------------------------------------------------------------------
+# Extra Configuration (GPU, Firewall)
+# -----------------------------------------------------------------------------
+
+configure_extras() {
+    header
+    gum style --foreground="#cba6f7" "Configure additional system settings:"
+    echo
+
+    # -------------------------------------------------------------------------
+    # GPU Detection and Selection
+    # -------------------------------------------------------------------------
+    info "Detecting graphics hardware..."
+    echo
+
+    # Get all GPU info
+    local all_gpus
+    all_gpus=$(lspci | grep -iE 'vga|3d|display' || true)
+
+    # Detect individual GPUs
+    DETECTED_NVIDIA=$(echo "$all_gpus" | grep -i 'nvidia' | head -1 || true)
+    DETECTED_INTEL=$(echo "$all_gpus" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe|arc)' | head -1 || true)
+    DETECTED_AMD=$(echo "$all_gpus" | grep -iE 'amd|radeon|ati' | head -1 || true)
+
+    # Check if AMD is an APU (integrated)
+    local amd_is_igpu=false
+    if [[ -n "$DETECTED_AMD" ]]; then
+        if echo "$DETECTED_AMD" | grep -qiE 'Radeon Graphics$|Ryzen.*Radeon|Renoir|Cezanne|Barcelo|Phoenix|Rembrandt|Lucienne|Mendocino'; then
+            amd_is_igpu=true
+        fi
+    fi
+
+    # Display detected hardware
+    gum style --foreground="#89b4fa" "Detected graphics hardware:"
+    if [[ -n "$DETECTED_NVIDIA" ]]; then
+        echo "  • NVIDIA: $(echo "$DETECTED_NVIDIA" | sed 's/.*: //')"
+    fi
+    if [[ -n "$DETECTED_INTEL" ]]; then
+        echo "  • Intel:  $(echo "$DETECTED_INTEL" | sed 's/.*: //')"
+    fi
+    if [[ -n "$DETECTED_AMD" ]]; then
+        if [[ "$amd_is_igpu" == "true" ]]; then
+            echo "  • AMD:    $(echo "$DETECTED_AMD" | sed 's/.*: //') (integrated)"
+        else
+            echo "  • AMD:    $(echo "$DETECTED_AMD" | sed 's/.*: //') (discrete)"
+        fi
+    fi
+    if [[ -z "$DETECTED_NVIDIA" && -z "$DETECTED_INTEL" && -z "$DETECTED_AMD" ]]; then
+        warn "  No recognized GPU detected"
+    fi
+    echo
+
+    # Build GPU options and determine recommendation
+    local gpu_options=()
+    local recommended=""
+
+    if [[ -n "$DETECTED_NVIDIA" ]]; then
+        # NVIDIA present - check for hybrid
+        if [[ -n "$DETECTED_INTEL" || "$amd_is_igpu" == "true" ]]; then
+            gpu_options+=("nvidia-setup (hybrid graphics - recommended)")
+            recommended="nvidia-setup (hybrid graphics - recommended)"
+        else
+            gpu_options+=("nvidia-setup (NVIDIA)")
+            recommended="nvidia-setup (NVIDIA)"
+        fi
+    fi
+
+    if [[ -n "$DETECTED_INTEL" && -z "$DETECTED_NVIDIA" ]]; then
+        gpu_options+=("intel-setup (Intel)")
+        [[ -z "$recommended" ]] && recommended="intel-setup (Intel)"
+    fi
+
+    if [[ -n "$DETECTED_AMD" && -z "$DETECTED_NVIDIA" ]]; then
+        if [[ "$amd_is_igpu" == "true" ]]; then
+            gpu_options+=("amd-setup (AMD integrated)")
+        else
+            gpu_options+=("amd-setup (AMD discrete)")
+        fi
+        [[ -z "$recommended" ]] && recommended="${gpu_options[-1]}"
+    fi
+
+    # Always add skip option
+    gpu_options+=("Skip GPU setup")
+
+    # Show recommendation if we have one
+    if [[ -n "$recommended" ]]; then
+        success "Recommended: $recommended"
+        echo
+    fi
+
+    info "Select GPU setup:"
+    GPU_SETUP=$(printf '%s\n' "${gpu_options[@]}" | gum choose)
+
+    # Extract just the script name from selection
+    case "$GPU_SETUP" in
+        nvidia-setup*) GPU_SETUP="nvidia" ;;
+        intel-setup*)  GPU_SETUP="intel" ;;
+        amd-setup*)    GPU_SETUP="amd" ;;
+        *)             GPU_SETUP="skip" ;;
+    esac
+
+    echo
+
+    # -------------------------------------------------------------------------
+    # Firewall Rules Selection
+    # -------------------------------------------------------------------------
+    info "Firewall Configuration:"
+    echo
+    gum style --foreground="#89b4fa" "Select firewall rules to enable (space to select, enter to confirm):"
+    echo
+
+    # Use gum choose with --no-limit for multi-select
+    FIREWALL_RULES=$(gum choose --no-limit \
+        "SSH (port 22)" \
+        "HTTP/HTTPS (ports 80, 443)" \
+        "KDE Connect / GSConnect (ports 1714-1764)")
+
+    echo
+    success "Configuration summary:"
+    echo "  GPU Setup:  $GPU_SETUP"
+    echo -n "  Firewall:   "
+    if [[ -z "$FIREWALL_RULES" ]]; then
+        echo "Default deny (no extra rules)"
+    else
+        echo "$FIREWALL_RULES" | tr '\n' ', ' | sed 's/, $//'
+        echo
+    fi
+    echo
+
+    if ! gum confirm "Proceed with these settings?"; then
+        configure_extras
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Partitioning
 # -----------------------------------------------------------------------------
 
@@ -676,6 +810,94 @@ configure_swap() {
 }
 
 # -----------------------------------------------------------------------------
+# Install Extra Packages (Bluetooth, Printer, Firewall, GPU)
+# -----------------------------------------------------------------------------
+
+install_extras() {
+    header
+    info "Installing additional system components..."
+    echo
+
+    # Set environment variables for chroot-aware scripts
+    export CHROOT_TARGET="/mnt"
+    export CHROOT_USER="$USERNAME"
+    export NONINTERACTIVE="1"
+
+    # Export detected GPU info so scripts don't need to re-detect
+    export DETECTED_NVIDIA
+    export DETECTED_INTEL
+    export DETECTED_AMD
+
+    # -------------------------------------------------------------------------
+    # Bluetooth Setup (automatic)
+    # -------------------------------------------------------------------------
+    info "Setting up Bluetooth..."
+    /usr/local/bin/bluetooth-setup
+    success "  Bluetooth configured!"
+    echo
+
+    # -------------------------------------------------------------------------
+    # Printer Setup (automatic)
+    # -------------------------------------------------------------------------
+    info "Setting up printing (CUPS)..."
+    /usr/local/bin/printer-setup
+    success "  Printing configured!"
+    echo
+
+    # -------------------------------------------------------------------------
+    # Firewall Setup (with user-selected rules)
+    # -------------------------------------------------------------------------
+    info "Setting up firewall (UFW)..."
+
+    # Build firewall args from selected rules
+    local firewall_args=""
+    if echo "$FIREWALL_RULES" | grep -q "SSH"; then
+        firewall_args="$firewall_args --ssh"
+    fi
+    if echo "$FIREWALL_RULES" | grep -q "HTTP"; then
+        firewall_args="$firewall_args --http"
+    fi
+    if echo "$FIREWALL_RULES" | grep -q "KDE Connect"; then
+        firewall_args="$firewall_args --kdeconnect"
+    fi
+
+    /usr/local/bin/firewall-setup $firewall_args
+    success "  Firewall configured!"
+    echo
+
+    # -------------------------------------------------------------------------
+    # GPU Setup (based on user selection)
+    # -------------------------------------------------------------------------
+    if [[ "$GPU_SETUP" != "skip" ]]; then
+        info "Setting up GPU drivers ($GPU_SETUP)..."
+        echo
+
+        case "$GPU_SETUP" in
+            nvidia)
+                /usr/local/bin/nvidia-setup
+                ;;
+            intel)
+                /usr/local/bin/intel-setup
+                ;;
+            amd)
+                /usr/local/bin/amd-setup
+                ;;
+        esac
+
+        success "  GPU drivers configured!"
+    else
+        info "Skipping GPU setup (can be run later with *-setup scripts)"
+    fi
+
+    # Clear environment
+    unset CHROOT_TARGET CHROOT_USER NONINTERACTIVE
+
+    echo
+    success "Additional components installed!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
 # Install AUR Packages
 # -----------------------------------------------------------------------------
 
@@ -791,6 +1013,7 @@ main() {
     welcome
     select_disk
     configure_user
+    configure_extras
     partition_disk
     format_partitions
     mount_partitions
@@ -798,6 +1021,7 @@ main() {
     install_base
     configure_system
     configure_swap
+    install_extras
     install_aur_packages
     finish
 }

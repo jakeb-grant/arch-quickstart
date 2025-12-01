@@ -4,6 +4,19 @@
 # ==============================================================================
 # Installs and configures UFW (Uncomplicated Firewall).
 #
+# Environment variables for chroot-aware operation:
+#   CHROOT_TARGET  - Target mount point (e.g., "/mnt") for installer mode
+#   NONINTERACTIVE - Skip confirmation prompts when set to "1"
+#
+# Arguments (for non-interactive mode):
+#   --ssh          - Allow SSH (port 22)
+#   --http         - Allow HTTP/HTTPS (ports 80, 443)
+#   --kdeconnect   - Allow KDE Connect (ports 1714-1764)
+#
+# Example:
+#   NONINTERACTIVE=1 firewall-setup --ssh --kdeconnect
+#   CHROOT_TARGET=/mnt NONINTERACTIVE=1 firewall-setup --ssh
+#
 # ==============================================================================
 
 set -e
@@ -18,78 +31,129 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+# =============================================================================
+# Chroot-aware helper functions
+# =============================================================================
+
+run_cmd() {
+    if [[ -n "$CHROOT_TARGET" ]]; then
+        arch-chroot "$CHROOT_TARGET" "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+pkg_install() {
+    run_cmd pacman -S --needed --noconfirm "$@"
+}
+
+svc_enable() {
+    run_cmd systemctl enable "$@"
+}
+
+# =============================================================================
+# Parse arguments
+# =============================================================================
+
+ALLOW_SSH=false
+ALLOW_HTTP=false
+ALLOW_KDECONNECT=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --ssh) ALLOW_SSH=true; shift ;;
+        --http) ALLOW_HTTP=true; shift ;;
+        --kdeconnect) ALLOW_KDECONNECT=true; shift ;;
+        *) shift ;;
+    esac
+done
+
+# =============================================================================
+# Main Script
+# =============================================================================
+
 info "Firewall Setup (UFW)"
 echo
 
-# Check if already installed
-if command -v ufw &>/dev/null; then
+# Check if already installed (only in non-chroot mode)
+if [[ -z "$CHROOT_TARGET" ]] && command -v ufw &>/dev/null; then
     info "UFW is already installed."
-    ufw status
+    run_cmd ufw status
     echo
-    read -p "Reconfigure UFW? [y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 0
+    if [[ "$NONINTERACTIVE" != "1" ]]; then
+        read -p "Reconfigure UFW? [y/N] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 0
+        fi
     fi
 fi
 
 # Install UFW
 info "Installing UFW..."
-sudo pacman -S --needed --noconfirm ufw
+pkg_install ufw
 
-# Reset to defaults
-info "Resetting UFW to defaults..."
-sudo ufw --force reset
-
-# Set default policies
+# Reset and set default policies
 info "Setting default policies (deny incoming, allow outgoing)..."
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
+run_cmd ufw --force reset
+run_cmd ufw default deny incoming
+run_cmd ufw default allow outgoing
 
-# Common rules
-echo
-info "Select additional rules to enable:"
-echo
+# Interactive rule selection (only if not non-interactive and no args provided)
+if [[ "$NONINTERACTIVE" != "1" ]] && [[ "$ALLOW_SSH" == "false" && "$ALLOW_HTTP" == "false" && "$ALLOW_KDECONNECT" == "false" ]]; then
+    echo
+    info "Select additional rules to enable:"
+    echo
 
-# SSH
-read -p "Allow SSH (port 22)? [y/N] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    sudo ufw allow ssh
-    info "SSH allowed"
+    # SSH
+    read -p "Allow SSH (port 22)? [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] && ALLOW_SSH=true
+
+    # HTTP/HTTPS
+    read -p "Allow HTTP/HTTPS (ports 80, 443)? [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] && ALLOW_HTTP=true
+
+    # KDE Connect / GSConnect
+    read -p "Allow KDE Connect / GSConnect (ports 1714-1764)? [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] && ALLOW_KDECONNECT=true
 fi
 
-# HTTP/HTTPS
-read -p "Allow HTTP/HTTPS (ports 80, 443)? [y/N] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    sudo ufw allow http
-    sudo ufw allow https
-    info "HTTP/HTTPS allowed"
+# Apply selected rules
+if [[ "$ALLOW_SSH" == "true" ]]; then
+    run_cmd ufw allow ssh
+    info "Allowed: SSH (port 22)"
 fi
 
-# KDE Connect / GSConnect
-read -p "Allow KDE Connect / GSConnect (ports 1714-1764)? [y/N] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    sudo ufw allow 1714:1764/udp
-    sudo ufw allow 1714:1764/tcp
-    info "KDE Connect ports allowed"
+if [[ "$ALLOW_HTTP" == "true" ]]; then
+    run_cmd ufw allow http
+    run_cmd ufw allow https
+    info "Allowed: HTTP/HTTPS (ports 80, 443)"
+fi
+
+if [[ "$ALLOW_KDECONNECT" == "true" ]]; then
+    run_cmd ufw allow 1714:1764/udp
+    run_cmd ufw allow 1714:1764/tcp
+    info "Allowed: KDE Connect (ports 1714-1764)"
 fi
 
 # Enable the firewall
 echo
 info "Enabling UFW..."
-sudo systemctl enable ufw.service
-sudo ufw --force enable
+svc_enable ufw.service
+run_cmd ufw --force enable
 
 echo
 info "Firewall setup complete!"
-echo
-sudo ufw status verbose
-echo
-info "Useful commands:"
-echo "  ufw status          - Show current rules"
-echo "  ufw allow <port>    - Allow a port"
-echo "  ufw deny <port>     - Deny a port"
-echo "  ufw delete <rule>   - Delete a rule"
+if [[ -z "$CHROOT_TARGET" ]]; then
+    echo
+    run_cmd ufw status verbose
+    echo
+    info "Useful commands:"
+    echo "  ufw status          - Show current rules"
+    echo "  ufw allow <port>    - Allow a port"
+    echo "  ufw deny <port>     - Deny a port"
+    echo "  ufw delete <rule>   - Delete a rule"
+fi
