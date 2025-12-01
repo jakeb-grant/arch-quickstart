@@ -100,7 +100,13 @@ After reboot:
 
 ### 4. Post-Install Setup
 
-Run these scripts as needed after first boot.
+The installer automatically configures:
+- **Bluetooth** (bluez + blueman)
+- **Printing** (CUPS + drivers)
+- **Firewall** (UFW with user-selected rules)
+- **GPU drivers** (based on detected hardware)
+
+These scripts can also be run manually for reconfiguration:
 
 #### GPU Drivers
 
@@ -218,11 +224,11 @@ DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_KEYMAP="us"
 ```
 
-### `target-packages.x86_64` - Installed System Packages
+### `archiso/airootfs/root/target-packages.x86_64` - Installed System Packages
 
-Packages installed on the target system (the full Hyprland desktop).
+Packages installed on the target system (the full Hyprland desktop). This is the **single source of truth** for target packages—the installer reads from this location.
 
-### `packages.x86_64` - Live ISO Packages
+### `archiso/packages.x86_64` - Live ISO Packages
 
 Packages included in the live environment (for installation/rescue).
 
@@ -232,7 +238,6 @@ Packages included in the live environment (for installation/rescue).
 archiso/
 ├── profiledef.sh              # ISO profile configuration
 ├── packages.x86_64            # Live ISO packages
-├── target-packages.x86_64     # Target system packages
 ├── pacman.conf                # Pacman config (multilib enabled)
 ├── airootfs/
 │   ├── etc/
@@ -242,7 +247,7 @@ archiso/
 │   │       └── hyprland.conf  # Default Hyprland config
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
-│   │   └── target-packages.x86_64
+│   │   └── target-packages.x86_64  # Target system packages (single source of truth)
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
 │       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
