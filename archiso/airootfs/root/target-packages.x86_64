@@ -32,6 +32,10 @@ intel-ucode
 hyprland
 sddm
 waybar
+hyprlock
+hypridle
+hyprpicker
+# awww-git (AUR) - efficient animated wallpaper daemon for Wayland, replacing swww
 # walker (AUR) - installed by installer script
 
 # Wayland support
