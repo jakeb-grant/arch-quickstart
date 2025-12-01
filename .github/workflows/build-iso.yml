@@ -45,7 +45,7 @@ jobs:
       - name: Update system and install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm archiso mkinitcpio-archiso grub dosfstools squashfs-tools libisoburn
+          pacman -S --noconfirm archiso mkinitcpio-archiso grub dosfstools squashfs-tools libisoburn curl jq
 
       - name: Validate package lists
         run: |
@@ -92,7 +92,7 @@ jobs:
 
           if [[ -n "$INVALID_PACKAGES" ]]; then
             echo ""
-            echo "ERROR: The following packages were not found in the repositories:"
+            echo "ERROR: The following official packages were not found in the repositories:"
             echo "$INVALID_PACKAGES"
             echo ""
             echo "Please fix the package names in the package lists"
@@ -100,7 +100,70 @@ jobs:
           fi
 
           echo ""
-          echo "All packages validated successfully!"
+          echo "All official packages validated successfully!"
+
+          # Validate AUR packages
+          echo ""
+          echo "Validating packages in archiso/airootfs/root/aur-packages.x86_64 (AUR)..."
+
+          AUR_PACKAGES=""
+          while IFS= read -r package; do
+            # Skip empty lines and comments
+            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
+              continue
+            fi
+            AUR_PACKAGES="$AUR_PACKAGES $package"
+          done < archiso/airootfs/root/aur-packages.x86_64
+
+          if [[ -n "$AUR_PACKAGES" ]]; then
+            # Build query URL with all packages
+            QUERY_ARGS=""
+            for pkg in $AUR_PACKAGES; do
+              QUERY_ARGS="${QUERY_ARGS}&arg[]=${pkg}"
+            done
+            QUERY_ARGS="${QUERY_ARGS:1}"  # Remove leading &
+
+            # Query AUR API
+            AUR_RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${QUERY_ARGS}")
+
+            # Check for API errors
+            if ! echo "$AUR_RESPONSE" | jq -e '.type == "multiinfo"' > /dev/null 2>&1; then
+              echo "ERROR: Failed to query AUR API"
+              echo "$AUR_RESPONSE"
+              exit 1
+            fi
+
+            # Get list of found packages
+            FOUND_PACKAGES=$(echo "$AUR_RESPONSE" | jq -r '.results[].Name')
+
+            # Check each package
+            INVALID_AUR=""
+            for pkg in $AUR_PACKAGES; do
+              if echo "$FOUND_PACKAGES" | grep -q "^${pkg}$"; then
+                echo "✓ Valid AUR package: $pkg"
+              else
+                echo "❌ Invalid AUR package: $pkg"
+                INVALID_AUR="$INVALID_AUR $pkg"
+              fi
+            done
+
+            if [[ -n "$INVALID_AUR" ]]; then
+              echo ""
+              echo "ERROR: The following AUR packages were not found:"
+              echo "$INVALID_AUR"
+              echo ""
+              echo "Please fix the package names in aur-packages.x86_64"
+              exit 1
+            fi
+
+            echo ""
+            echo "All AUR packages validated successfully!"
+          else
+            echo "No AUR packages to validate"
+          fi
+
+          echo ""
+          echo "All package validation complete!"
 
       - name: Build ISO
         run: |
