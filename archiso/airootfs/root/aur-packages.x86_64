@@ -1,0 +1,18 @@
+# AUR packages installed on the target system
+# One package per line, comments starting with # are ignored
+
+# Yay AUR helper (installed first, required for other AUR packages)
+yay-bin
+
+# Walker application launcher
+walker-bin
+
+# Elephant indexer and providers for Walker
+elephant
+elephant-desktopapplications
+elephant-windows
+elephant-clipboard
+elephant-calc
+elephant-runner
+elephant-files
+elephant-archlinuxpkgs
