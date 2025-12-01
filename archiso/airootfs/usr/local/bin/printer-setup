@@ -4,6 +4,11 @@
 # ==============================================================================
 # Installs CUPS printing system and common drivers.
 #
+# Environment variables for chroot-aware operation:
+#   CHROOT_TARGET  - Target mount point (e.g., "/mnt") for installer mode
+#   CHROOT_USER    - Username to configure (for group membership)
+#   NONINTERACTIVE - Skip confirmation prompts when set to "1"
+#
 # ==============================================================================
 
 set -e
@@ -17,6 +22,36 @@ NC='\033[0m'
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+
+# =============================================================================
+# Chroot-aware helper functions
+# =============================================================================
+
+run_cmd() {
+    if [[ -n "$CHROOT_TARGET" ]]; then
+        arch-chroot "$CHROOT_TARGET" "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+pkg_install() {
+    run_cmd pacman -S --needed --noconfirm "$@"
+}
+
+svc_enable() {
+    run_cmd systemctl enable "$@"
+}
+
+svc_start() {
+    if [[ -z "$CHROOT_TARGET" ]]; then
+        sudo systemctl start "$@"
+    fi
+}
+
+# =============================================================================
+# Main Script
+# =============================================================================
 
 info "Printer Setup (CUPS)"
 echo
@@ -42,32 +77,45 @@ for pkg in "${PACKAGES[@]}"; do
 done
 echo
 
-warn "This will install ~200MB of packages."
-read -p "Continue? [Y/n] " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Nn]$ ]]; then
-    echo "Aborted."
-    exit 0
+# Skip confirmation in non-interactive mode
+if [[ "$NONINTERACTIVE" != "1" ]]; then
+    warn "This will install ~200MB of packages."
+    read -p "Continue? [Y/n] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
 # Install packages
 info "Installing printing packages..."
-sudo pacman -S --needed --noconfirm "${PACKAGES[@]}"
+pkg_install "${PACKAGES[@]}"
 
 # Enable and start CUPS service
 info "Enabling CUPS service..."
-sudo systemctl enable cups.service
-sudo systemctl start cups.service
+svc_enable cups.service
+svc_start cups.service
 
-# Add current user to lp group for printer access
-CURRENT_USER=$(whoami)
-if [[ "$CURRENT_USER" != "root" ]]; then
-    info "Adding $CURRENT_USER to lp group..."
-    sudo usermod -aG lp "$CURRENT_USER"
+# Add user to lp group for printer access
+# Determine which user to configure
+if [[ -n "$CHROOT_USER" ]]; then
+    TARGET_USER="$CHROOT_USER"
+elif [[ -n "$SUDO_USER" ]]; then
+    TARGET_USER="$SUDO_USER"
+else
+    TARGET_USER=$(whoami)
+fi
+
+if [[ "$TARGET_USER" != "root" ]]; then
+    info "Adding $TARGET_USER to lp group..."
+    run_cmd usermod -aG lp "$TARGET_USER"
 fi
 
 echo
 info "Printer setup complete!"
-info "Web interface: http://localhost:631"
-info "GUI tool: system-config-printer"
-info "You may need to log out and back in for group changes to take effect."
+if [[ -z "$CHROOT_TARGET" ]]; then
+    info "Web interface: http://localhost:631"
+    info "GUI tool: system-config-printer"
+    info "You may need to log out and back in for group changes to take effect."
+fi
