@@ -102,6 +102,7 @@ fastfetch
 man-db
 man-pages
 socat
+pacman-contrib
 bash-completion
 zsh
 wget
