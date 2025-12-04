@@ -101,6 +101,7 @@ btop
 fastfetch
 man-db
 man-pages
+socat
 bash-completion
 zsh
 wget
