@@ -103,6 +103,7 @@ man-db
 man-pages
 socat
 pacman-contrib
+rebuild-detector
 bash-completion
 zsh
 wget
