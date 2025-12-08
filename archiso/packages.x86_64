@@ -42,7 +42,6 @@ wireless-regdb
 
 # System utilities
 arch-install-scripts
-archinstall
 bash-completion
 bind
 dmidecode
@@ -54,8 +53,6 @@ libfido2
 libusb-compat
 lsscsi
 lvm2
-man-db
-man-pages
 mdadm
 nvme-cli
 open-iscsi
@@ -63,31 +60,22 @@ open-vm-tools
 pv
 reflector
 rsync
-screen
 sdparm
 sg3_utils
 smartmontools
 sudo
-tmux
 tpm2-tss
 usbmuxd
 usbutils
 vim
 which
-zsh
 
 # Diagnostic tools
 lsof
-strace
 
 # Archive tools
-7zip
-unrar
 unzip
 zip
-
-# Git and development
-git
 
 # Installer TUI
 gum
