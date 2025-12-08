@@ -34,14 +34,11 @@ dhcpcd
 dnsmasq
 ethtool
 iwd
-modemmanager
-networkmanager
 nfs-utils
 nss-mdns
 openssh
 usb_modeswitch
 wireless-regdb
-wpa_supplicant
 
 # System utilities
 arch-install-scripts

@@ -105,19 +105,31 @@ connect_wifi() {
     info "Scanning for WiFi networks..."
     echo
 
-    # Make sure NetworkManager is running
-    systemctl start NetworkManager 2>/dev/null || true
+    # Make sure iwd is running
+    systemctl start iwd 2>/dev/null || true
     sleep 2
+
+    # Get WiFi interface name
+    local wifi_device
+    wifi_device=$(iwctl device list 2>/dev/null | awk '/station/{print $2}' | head -1)
+
+    if [[ -z "$wifi_device" ]]; then
+        die "No WiFi device found!"
+    fi
+
+    # Scan for networks
+    iwctl station "$wifi_device" scan 2>/dev/null || true
+    sleep 3
 
     # Get list of WiFi networks
     local networks
-    networks=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -v '^$' | sort -u)
+    networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | tail -n +5 | awk '{print $1}' | grep -v '^$' | sort -u)
 
     if [[ -z "$networks" ]]; then
         warn "No WiFi networks found. Rescanning..."
-        nmcli dev wifi rescan 2>/dev/null || true
+        iwctl station "$wifi_device" scan 2>/dev/null || true
         sleep 3
-        networks=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -v '^$' | sort -u)
+        networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | tail -n +5 | awk '{print $1}' | grep -v '^$' | sort -u)
     fi
 
     if [[ -z "$networks" ]]; then
@@ -137,7 +149,7 @@ connect_wifi() {
     wifi_password=$(gum input --password --placeholder "WiFi password")
 
     info "Connecting to '$ssid'..."
-    if nmcli dev wifi connect "$ssid" password "$wifi_password" 2>&1; then
+    if iwctl --passphrase "$wifi_password" station "$wifi_device" connect "$ssid" 2>&1; then
         sleep 2
         if ping -c 1 -W 3 archlinux.org &>/dev/null; then
             success "Connected to WiFi!"
@@ -628,7 +640,7 @@ install_base() {
         mapfile -t packages < <(grep -v '^#' "$PACKAGES_FILE" | grep -v '^$')
     else
         # Fallback to essential packages if file not found
-        packages=(base linux linux-firmware grub efibootmgr networkmanager)
+        packages=(base linux linux-firmware grub efibootmgr iwd)
         warn "Package list not found, installing minimal system..."
     fi
 
@@ -736,8 +748,23 @@ EOF
 
     # Enable services
     info "  Enabling services..."
-    arch-chroot /mnt systemctl enable NetworkManager
+    arch-chroot /mnt systemctl enable iwd
+    arch-chroot /mnt systemctl enable systemd-resolved
     arch-chroot /mnt systemctl enable sddm
+
+    # Configure iwd with systemd-resolved
+    info "  Configuring iwd..."
+    mkdir -p /mnt/etc/iwd
+    cat > /mnt/etc/iwd/main.conf << 'EOF'
+[General]
+EnableNetworkConfiguration=true
+
+[Network]
+NameResolvingService=systemd
+EOF
+
+    # Link resolv.conf to systemd-resolved
+    ln -sf /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf
 
     # Copy setup scripts to installed system
     info "  Installing setup scripts..."
