@@ -75,7 +75,7 @@ fi
 PACKAGES=(
     "bluez"           # Bluetooth protocol stack
     "bluez-utils"     # bluetoothctl and other utilities
-    "blueman"         # GTK Bluetooth manager (tray applet)
+    # "blueman"       # GTK Bluetooth manager (tray applet) (using bluetui in target-packages.x86_64
 )
 
 info "The following packages will be installed:"
@@ -117,6 +117,7 @@ fi
 echo
 info "Bluetooth setup complete!"
 if [[ -z "$CHROOT_TARGET" ]]; then
-    info "You can use 'blueman-manager' for GUI or 'bluetoothctl' for CLI."
-    info "To pair a device: bluetoothctl -> scan on -> pair <MAC> -> connect <MAC>"
+    info "You can use 'bluetoothctl' for CLI."
+    info "To pair: bluetoothctl -> scan on -> pair <MAC> -> connect <MAC>"
+    info "Optional: Install 'bluetui' or 'blueman' for GUI/TUI frontends."
 fi
