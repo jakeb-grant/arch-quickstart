@@ -534,6 +534,9 @@ configure_user() {
     ENCRYPT_DISK="no"
     ENCRYPT_PASSWORD=""
     info "Disk encryption (LUKS):"
+    if [[ "$INSTALL_TYPE" == "dualboot" ]]; then
+        warn "Note: This will only encrypt the Linux partition, not Windows."
+    fi
     if gum confirm --default=false "Enable full disk encryption?"; then
         ENCRYPT_DISK="yes"
         if gum confirm "Use the same password for encryption?"; then
@@ -789,14 +792,18 @@ partition_disk_dualboot() {
     gum spin --spinner dot --title "Creating root partition..." -- \
         parted -s "$DISK" mkpart primary btrfs "$UNALLOCATED_START" 100%
 
-    sleep 1  # Wait for kernel to update partition table
+    # Update kernel partition table
+    partprobe "$DISK"
+    sleep 1
 
     # Find the newly created partition (last partition on disk)
+    # Handles: sda1, nvme0n1p1, mmcblk0p1, vda1
     local last_part_num
-    last_part_num=$(lsblk -lno NAME "$DISK" | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+p)[0-9]+$' | \
+    last_part_num=$(lsblk -lno NAME "$DISK" | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+p|mmcblk[0-9]+p|vd[a-z]+)[0-9]+$' | \
                     sed 's/.*[^0-9]//' | sort -n | tail -1)
 
-    if [[ "$DISK" == *"nvme"* ]]; then
+    # Determine partition naming scheme (with or without 'p' separator)
+    if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
         ROOT_PART="${DISK}p${last_part_num}"
     else
         ROOT_PART="${DISK}${last_part_num}"
