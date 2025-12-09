@@ -70,6 +70,111 @@ header() {
 }
 
 # -----------------------------------------------------------------------------
+# Installation Type Variables
+# -----------------------------------------------------------------------------
+
+INSTALL_TYPE="fresh"        # "fresh" or "dualboot"
+EXISTING_EFI_PART=""        # Existing EFI partition for dual-boot
+WINDOWS_DETECTED="no"       # Whether Windows was detected
+UNALLOCATED_START=""        # Start sector of unallocated space
+UNALLOCATED_SIZE=""         # Size of unallocated space in MB
+
+# -----------------------------------------------------------------------------
+# Dual-Boot Detection Functions
+# -----------------------------------------------------------------------------
+
+# Detect if Windows is installed on a disk
+detect_windows() {
+    local disk="$1"
+
+    # Check for NTFS partitions
+    for part in "${disk}"*[0-9]; do
+        [[ -b "$part" ]] || continue
+
+        local fstype
+        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
+
+        if [[ "$fstype" == "ntfs" ]]; then
+            WINDOWS_DETECTED="yes"
+            return 0
+        fi
+    done
+
+    # Also check for p1, p2 style (NVMe)
+    for part in "${disk}"p*[0-9]; do
+        [[ -b "$part" ]] || continue
+
+        local fstype
+        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
+
+        if [[ "$fstype" == "ntfs" ]]; then
+            WINDOWS_DETECTED="yes"
+            return 0
+        fi
+    done
+
+    WINDOWS_DETECTED="no"
+    return 1
+}
+
+# Find existing EFI partition on a disk
+detect_efi_partition() {
+    local disk="$1"
+
+    # Look for partition with ESP flag using parttype GUID
+    local efi_part
+    efi_part=$(lsblk -lno NAME,PARTTYPE "$disk" 2>/dev/null | \
+               grep -i "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" | \
+               awk '{print $1}' | head -1)
+
+    if [[ -n "$efi_part" ]]; then
+        EXISTING_EFI_PART="/dev/$efi_part"
+        return 0
+    fi
+
+    EXISTING_EFI_PART=""
+    return 1
+}
+
+# Find unallocated space on a disk (minimum 20GB)
+detect_unallocated_space() {
+    local disk="$1"
+    local min_size_mb="${2:-20480}"  # Minimum 20GB by default
+
+    # Use parted to find free space
+    local free_space
+    free_space=$(parted -s "$disk" unit MB print free 2>/dev/null | \
+                 grep "Free Space" | \
+                 tail -1)
+
+    if [[ -n "$free_space" ]]; then
+        # Parse the free space line
+        local size_mb
+        size_mb=$(echo "$free_space" | awk '{print $3}' | sed 's/MB//')
+
+        if [[ -n "$size_mb" ]] && (( ${size_mb%.*} >= min_size_mb )); then
+            UNALLOCATED_START=$(echo "$free_space" | awk '{print $1}')
+            UNALLOCATED_SIZE="${size_mb%.*}"
+            return 0
+        fi
+    fi
+
+    UNALLOCATED_START=""
+    UNALLOCATED_SIZE=""
+    return 1
+}
+
+# Get human-readable size
+human_size() {
+    local size_mb="$1"
+    if (( size_mb >= 1024 )); then
+        echo "$((size_mb / 1024))GB"
+    else
+        echo "${size_mb}MB"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Network Check
 # -----------------------------------------------------------------------------
 
@@ -182,15 +287,67 @@ welcome() {
         "  • SDDM display manager" \
         "  • Waybar, Walker, Ghostty" \
         "  • Firefox, Nautilus" \
-        "  • Pipewire audio" \
-        "" \
-        "The installation will:" \
-        "  • Erase the selected disk completely" \
-        "  • Create GPT partitions (EFI + BTRFS root)" \
-        "  • Install all packages and configure the system"
+        "  • Pipewire audio"
 
     echo
     if ! gum confirm "Ready to proceed?"; then
+        gum style --foreground="#f9e2af" "Installation cancelled."
+        exit 0
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Installation Type Selection
+# -----------------------------------------------------------------------------
+
+select_install_type() {
+    header
+    gum style --foreground="#cba6f7" "Select installation type:"
+    echo
+
+    INSTALL_TYPE=$(gum choose \
+        "Fresh Install (erase entire disk)" \
+        "Dual Boot (alongside Windows)")
+
+    if [[ "$INSTALL_TYPE" == *"Fresh"* ]]; then
+        INSTALL_TYPE="fresh"
+    else
+        INSTALL_TYPE="dualboot"
+        show_dualboot_warnings
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Dual-Boot Prerequisites Warning
+# -----------------------------------------------------------------------------
+
+show_dualboot_warnings() {
+    header
+    gum style \
+        --foreground="#f9e2af" \
+        --bold \
+        "⚠  DUAL BOOT REQUIREMENTS"
+    echo
+
+    gum style \
+        --padding "1 2" \
+        --margin "0 2" \
+        "Before continuing, ensure you have:" \
+        "" \
+        "  • Disabled Fast Startup in Windows" \
+        "    (Settings → System → Power → Fast Startup → Off)" \
+        "" \
+        "  • Shrunk your Windows partition to create free space" \
+        "    (Disk Management → Right-click C: → Shrink Volume)" \
+        "    Minimum 20GB required for Linux" \
+        "" \
+        "  • Disabled Secure Boot in BIOS/UEFI (if enabled)"
+
+    echo
+    warn "Proceeding without these steps may cause data loss or boot issues!"
+    echo
+
+    if ! gum confirm "I have completed these steps. Continue?"; then
         gum style --foreground="#f9e2af" "Installation cancelled."
         exit 0
     fi
@@ -212,6 +369,14 @@ select_disk() {
         die "No suitable disks found!"
     fi
 
+    if [[ "$INSTALL_TYPE" == "dualboot" ]]; then
+        select_disk_dualboot
+    else
+        select_disk_fresh
+    fi
+}
+
+select_disk_fresh() {
     gum style --foreground="#cba6f7" "Select the target disk for installation:"
     echo
 
@@ -239,6 +404,80 @@ select_disk() {
     CONFIRM=$(gum input --placeholder "Type 'yes' to confirm")
 
     if [[ "$CONFIRM" != "yes" ]]; then
+        die "Installation cancelled."
+    fi
+}
+
+select_disk_dualboot() {
+    gum style --foreground="#cba6f7" "Select the disk with Windows installed:"
+    echo
+
+    # Show disks with Windows detection status
+    local disk_info
+    for disk_entry in "${disks[@]}"; do
+        local disk_name
+        disk_name=$(echo "$disk_entry" | awk '{print $1}')
+        detect_windows "$disk_name"
+        if [[ "$WINDOWS_DETECTED" == "yes" ]]; then
+            disk_info+="$disk_entry [Windows detected]"$'\n'
+        else
+            disk_info+="$disk_entry"$'\n'
+        fi
+    done
+
+    DISK=$(echo -n "$disk_info" | gum choose --height=10)
+    DISK=$(echo "$DISK" | awk '{print $1}')
+
+    if [[ -z "$DISK" ]]; then
+        die "No disk selected!"
+    fi
+
+    # Verify Windows is on this disk
+    detect_windows "$DISK"
+    if [[ "$WINDOWS_DETECTED" != "yes" ]]; then
+        warn "No Windows installation detected on $DISK"
+        if ! gum confirm "Continue anyway?"; then
+            die "Installation cancelled."
+        fi
+    fi
+
+    # Check for existing EFI partition
+    if ! detect_efi_partition "$DISK"; then
+        die "No EFI partition found on $DISK. Is this a UEFI system?"
+    fi
+    success "Found EFI partition: $EXISTING_EFI_PART"
+
+    # Check for unallocated space
+    echo
+    info "Checking for unallocated space..."
+    if ! detect_unallocated_space "$DISK"; then
+        echo
+        gum style --foreground="#f38ba8" \
+            "ERROR: No unallocated space found (minimum 20GB required)" \
+            "" \
+            "Please boot into Windows and shrink your partition:" \
+            "  1. Open Disk Management (diskmgmt.msc)" \
+            "  2. Right-click on C: drive" \
+            "  3. Select 'Shrink Volume'" \
+            "  4. Shrink by at least 20480 MB (20GB)" \
+            "  5. Reboot and run this installer again"
+        die "Cannot proceed without unallocated space."
+    fi
+
+    success "Found $(human_size "$UNALLOCATED_SIZE") of unallocated space"
+    echo
+
+    # Show partition layout
+    info "Current partition layout:"
+    lsblk "$DISK" -o NAME,SIZE,FSTYPE,LABEL
+    echo
+
+    gum style --foreground="#a6e3a1" \
+        "Linux will be installed in the unallocated space." \
+        "Your Windows installation will NOT be modified."
+    echo
+
+    if ! gum confirm "Proceed with dual-boot installation?"; then
         die "Installation cancelled."
     fi
 }
@@ -492,6 +731,14 @@ configure_extras() {
 # -----------------------------------------------------------------------------
 
 partition_disk() {
+    if [[ "$INSTALL_TYPE" == "dualboot" ]]; then
+        partition_disk_dualboot
+    else
+        partition_disk_fresh
+    fi
+}
+
+partition_disk_fresh() {
     header
     info "Partitioning $DISK..."
     echo
@@ -528,6 +775,39 @@ partition_disk() {
     sleep 2
 }
 
+partition_disk_dualboot() {
+    header
+    info "Creating Linux partition in unallocated space..."
+    echo
+
+    # Use existing EFI partition
+    EFI_PART="$EXISTING_EFI_PART"
+    info "Using existing EFI partition: $EFI_PART"
+
+    # Create root partition in unallocated space
+    # UNALLOCATED_START is already in MB format from parted
+    gum spin --spinner dot --title "Creating root partition..." -- \
+        parted -s "$DISK" mkpart primary btrfs "$UNALLOCATED_START" 100%
+
+    sleep 1  # Wait for kernel to update partition table
+
+    # Find the newly created partition (last partition on disk)
+    local last_part_num
+    last_part_num=$(lsblk -lno NAME "$DISK" | grep -E '^(sd[a-z]+|nvme[0-9]+n[0-9]+p)[0-9]+$' | \
+                    sed 's/.*[^0-9]//' | sort -n | tail -1)
+
+    if [[ "$DISK" == *"nvme"* ]]; then
+        ROOT_PART="${DISK}p${last_part_num}"
+    else
+        ROOT_PART="${DISK}${last_part_num}"
+    fi
+
+    success "Created root partition: $ROOT_PART"
+    echo
+    lsblk "$DISK" -o NAME,SIZE,FSTYPE,LABEL
+    sleep 2
+}
+
 # -----------------------------------------------------------------------------
 # Formatting
 # -----------------------------------------------------------------------------
@@ -537,8 +817,13 @@ format_partitions() {
     info "Formatting partitions..."
     echo
 
-    info "Formatting EFI partition (FAT32)..."
-    mkfs.fat -F32 "$EFI_PART"
+    # Only format EFI partition for fresh installs
+    if [[ "$INSTALL_TYPE" != "dualboot" ]]; then
+        info "Formatting EFI partition (FAT32)..."
+        mkfs.fat -F32 "$EFI_PART"
+    else
+        info "Using existing EFI partition (not formatting)"
+    fi
 
     if [[ "$ENCRYPT_DISK" == "yes" ]]; then
         info "Setting up LUKS encryption..."
@@ -739,6 +1024,12 @@ EOF
         # Regenerate initramfs
         info "  Regenerating initramfs..."
         arch-chroot /mnt mkinitcpio -P
+    fi
+
+    # Configure os-prober for dual-boot
+    if [[ "$INSTALL_TYPE" == "dualboot" ]]; then
+        info "  Enabling os-prober for Windows detection..."
+        echo "GRUB_DISABLE_OS_PROBER=false" >> /mnt/etc/default/grub
     fi
 
     # Install bootloader
@@ -1056,6 +1347,7 @@ main() {
     fi
 
     welcome
+    select_install_type
     select_disk
     configure_user
     configure_extras
