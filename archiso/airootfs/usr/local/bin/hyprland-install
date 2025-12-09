@@ -417,7 +417,7 @@ select_disk_dualboot() {
     for disk_entry in "${disks[@]}"; do
         local disk_name
         disk_name=$(echo "$disk_entry" | awk '{print $1}')
-        detect_windows "$disk_name"
+        detect_windows "$disk_name" || true  # Don't fail if no Windows found
         if [[ "$WINDOWS_DETECTED" == "yes" ]]; then
             disk_info+="$disk_entry [Windows detected]"$'\n'
         else
@@ -433,7 +433,7 @@ select_disk_dualboot() {
     fi
 
     # Verify Windows is on this disk
-    detect_windows "$DISK"
+    detect_windows "$DISK" || true
     if [[ "$WINDOWS_DETECTED" != "yes" ]]; then
         warn "No Windows installation detected on $DISK"
         if ! gum confirm "Continue anyway?"; then
