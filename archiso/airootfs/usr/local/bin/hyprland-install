@@ -87,31 +87,11 @@ UNALLOCATED_SIZE=""         # Size of unallocated space in MB
 detect_windows() {
     local disk="$1"
 
-    # Check for NTFS partitions
-    for part in "${disk}"*[0-9]; do
-        [[ -b "$part" ]] || continue
-
-        local fstype
-        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
-
-        if [[ "$fstype" == "ntfs" ]]; then
-            WINDOWS_DETECTED="yes"
-            return 0
-        fi
-    done
-
-    # Also check for p1, p2 style (NVMe)
-    for part in "${disk}"p*[0-9]; do
-        [[ -b "$part" ]] || continue
-
-        local fstype
-        fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
-
-        if [[ "$fstype" == "ntfs" ]]; then
-            WINDOWS_DETECTED="yes"
-            return 0
-        fi
-    done
+    # Use lsblk to check for NTFS partitions on this disk
+    if lsblk -lno FSTYPE "$disk" 2>/dev/null | grep -q "ntfs"; then
+        WINDOWS_DETECTED="yes"
+        return 0
+    fi
 
     WINDOWS_DETECTED="no"
     return 1
