@@ -867,7 +867,7 @@ mount_partitions() {
 
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$mount_device" /mnt
 
-    mkdir -p /mnt/{boot/efi,home,.snapshots,var/log,swap}
+    mkdir -p /mnt/{boot,home,.snapshots,var/log,swap}
 
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$mount_device" /mnt/home
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$mount_device" /mnt/.snapshots
@@ -875,7 +875,7 @@ mount_partitions() {
     # Swap subvolume: no compression, no copy-on-write
     mount -o noatime,nodatacow,subvol=@swap "$mount_device" /mnt/swap
 
-    mount "$EFI_PART" /mnt/boot/efi
+    mount "$EFI_PART" /mnt/boot
 
     success "Partitions mounted!"
     sleep 1
@@ -1005,9 +1005,6 @@ EOF
         # Configure GRUB for encrypted root
         sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot\"|" /mnt/etc/default/grub
 
-        # Enable GRUB cryptodisk support
-        echo "GRUB_ENABLE_CRYPTODISK=y" >> /mnt/etc/default/grub
-
         # Regenerate initramfs
         info "  Regenerating initramfs..."
         arch-chroot /mnt mkinitcpio -P
@@ -1021,7 +1018,7 @@ EOF
 
     # Install bootloader
     info "  Installing GRUB bootloader..."
-    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
     arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
     # Enable services
