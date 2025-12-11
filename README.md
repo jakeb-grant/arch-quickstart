@@ -2,6 +2,10 @@
 
 A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop environment.
 
+## Related Repositories
+
+- **[jakeb-grant/dotfiles](https://github.com/jakeb-grant/dotfiles)** - Personal dotfiles managed with chezmoi. The installer can optionally apply these during installation.
+
 ## What's Included
 
 **Desktop Environment:**
@@ -14,7 +18,7 @@ A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop enviro
 **Applications:**
 - Firefox, Nautilus, Zed editor
 - PipeWire audio stack
-- NetworkManager
+- iwd + impala (WiFi management)
 
 **Fonts:** JetBrains Mono Nerd, Noto fonts
 
@@ -57,7 +61,7 @@ The TUI installer launches automatically and guides you through:
 **Partitions (GPT):**
 | Partition | Size | Format | Mount |
 |-----------|------|--------|-------|
-| EFI | 512MB | FAT32 | `/boot/efi` |
+| EFI | 512MB | FAT32 | `/boot` |
 | Root | Remaining | BTRFS | `/` |
 
 **BTRFS Subvolumes:**
@@ -89,7 +93,7 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - Multilib repository: Enabled (for 32-bit support)
 - Git configured with name/email
 - GRUB bootloader (UEFI)
-- Services enabled: NetworkManager, SDDM
+- Services enabled: iwd, systemd-resolved, SDDM
 
 ### 3. First Boot
 
