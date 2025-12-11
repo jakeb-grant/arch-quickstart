@@ -13,7 +13,6 @@ linux-headers
 # Bootloader
 grub
 efibootmgr
-os-prober
 
 # Filesystem
 btrfs-progs
