@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Dotfiles Setup Script
+# Dotfiles Setup Script (chezmoi)
 # ==============================================================================
-# Clone and apply your personal dotfiles.
+# Initialize and apply dotfiles using chezmoi.
 #
-# TODO: Configure this script with your dotfiles repository.
+# Usage:
+#   dotfiles-setup                    # Uses configured default repo
+#   dotfiles-setup <repo>             # Uses specified repo
+#   dotfiles-setup --hierarchical <main-repo> <extra-repo>  # Multiple repos
 #
 # ==============================================================================
 
@@ -21,106 +24,61 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # =============================================================================
-# CONFIGURATION - Edit these values
+# CONFIGURATION
 # =============================================================================
 
-# Your dotfiles repository (SSH or HTTPS)
-DOTFILES_REPO=""
-# Example: DOTFILES_REPO="https://github.com/username/dotfiles.git"
-# Example: DOTFILES_REPO="git@github.com:username/dotfiles.git"
-
-# Where to clone the dotfiles
-DOTFILES_DIR="$HOME/.dotfiles"
-
-# Installation method: "stow", "symlink", or "script"
-# - stow: Uses GNU stow to manage symlinks
-# - symlink: Manually creates symlinks for common configs
-# - script: Runs an install script from the repo (install.sh)
-INSTALL_METHOD="script"
+# Default dotfiles repository (leave empty to require argument)
+DEFAULT_REPO=""
+# Example: DEFAULT_REPO="https://github.com/username/dotfiles.git"
 
 # =============================================================================
 
-info "Dotfiles Setup"
+info "Dotfiles Setup (chezmoi)"
 echo
 
-# Check if configured
-if [[ -z "$DOTFILES_REPO" ]]; then
-    warn "This script is not configured yet!"
+# Check if chezmoi is installed
+if ! command -v chezmoi &>/dev/null; then
+    error "chezmoi is not installed!"
+fi
+
+# Determine repo to use
+REPO="${1:-$DEFAULT_REPO}"
+
+if [[ -z "$REPO" ]]; then
+    warn "No dotfiles repository specified!"
     echo
-    echo "To configure, edit this script and set:"
-    echo "  DOTFILES_REPO - Your dotfiles git repository URL"
-    echo "  INSTALL_METHOD - How to install (stow/symlink/script)"
+    echo "Usage:"
+    echo "  dotfiles-setup <github-username>"
+    echo "  dotfiles-setup <repo-url>"
     echo
-    echo "Script location: $(readlink -f "$0")"
+    echo "Examples:"
+    echo "  dotfiles-setup jakeb-grant"
+    echo "  dotfiles-setup https://github.com/user/dotfiles.git"
+    echo
+    echo "Or edit this script to set DEFAULT_REPO"
     exit 1
 fi
 
-# Check if already cloned
-if [[ -d "$DOTFILES_DIR" ]]; then
-    warn "Dotfiles directory already exists: $DOTFILES_DIR"
-    read -p "Pull latest changes? [Y/n] " -n 1 -r
+# Check if already initialized
+if [[ -d "$HOME/.local/share/chezmoi" ]]; then
+    warn "chezmoi already initialized"
+    read -p "Re-apply dotfiles? [Y/n] " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-        info "Pulling latest changes..."
-        git -C "$DOTFILES_DIR" pull
+        info "Updating and applying dotfiles..."
+        chezmoi update --apply
     fi
 else
-    # Clone the repository
-    info "Cloning dotfiles from $DOTFILES_REPO..."
-    git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
+    # Initialize and apply
+    info "Initializing chezmoi with $REPO..."
+    chezmoi init "$REPO" --apply
 fi
-
-# Install dotfiles based on method
-case "$INSTALL_METHOD" in
-    stow)
-        info "Installing with GNU Stow..."
-        if ! command -v stow &>/dev/null; then
-            sudo pacman -S --needed --noconfirm stow
-        fi
-        cd "$DOTFILES_DIR"
-        # Stow all directories (each subdir is a package)
-        for dir in */; do
-            stow -v "$dir"
-        done
-        ;;
-    symlink)
-        info "Creating symlinks..."
-        # Common config directories to link
-        configs=(
-            ".config/hypr"
-            ".config/waybar"
-            ".config/rofi"
-            ".config/ghostty"
-            ".config/zed"
-            ".zshrc"
-            ".bashrc"
-        )
-        for config in "${configs[@]}"; do
-            src="$DOTFILES_DIR/$config"
-            dest="$HOME/$config"
-            if [[ -e "$src" ]]; then
-                mkdir -p "$(dirname "$dest")"
-                ln -sfv "$src" "$dest"
-            fi
-        done
-        ;;
-    script)
-        info "Running install script..."
-        if [[ -x "$DOTFILES_DIR/install.sh" ]]; then
-            cd "$DOTFILES_DIR"
-            ./install.sh
-        elif [[ -f "$DOTFILES_DIR/install.sh" ]]; then
-            cd "$DOTFILES_DIR"
-            bash install.sh
-        else
-            warn "No install.sh found in dotfiles repo"
-            exit 1
-        fi
-        ;;
-    *)
-        error "Unknown install method: $INSTALL_METHOD"
-        ;;
-esac
 
 echo
 info "Dotfiles setup complete!"
+echo
+echo "Useful chezmoi commands:"
+echo "  chezmoi diff      - See pending changes"
+echo "  chezmoi apply     - Apply changes"
+echo "  chezmoi update    - Pull and apply latest"
+echo "  chezmoi edit      - Edit managed files"
