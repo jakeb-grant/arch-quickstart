@@ -306,6 +306,14 @@ jobs:
           echo ""
           echo "Official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
 
+          # Clear pacman cache to free disk space
+          # Build dependencies (archiso, etc.) aren't needed in offline repo
+          # Target packages are already in /tmp/offline-repo
+          echo ""
+          echo "Clearing build dependency cache to free disk space..."
+          pacman -Scc --noconfirm 2>/dev/null || true
+          echo "Disk space available: $(df -h / | tail -1 | awk '{print $4}')"
+
           # ===========================================
           # Build AUR packages using yay
           # ===========================================
