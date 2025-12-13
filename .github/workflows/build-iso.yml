@@ -165,6 +165,109 @@ jobs:
           echo ""
           echo "All package validation complete!"
 
+      - name: Build offline package repository
+        run: |
+          echo "=========================================="
+          echo "Building offline package repository"
+          echo "=========================================="
+
+          # Create build user for AUR packages (makepkg cannot run as root)
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+          # Install additional build dependencies
+          pacman -S --noconfirm --needed git base-devel
+
+          # Create directories
+          mkdir -p /tmp/offline-repo
+          mkdir -p /tmp/aur-build
+          mkdir -p /tmp/blankdb/local
+          chown builder:builder /tmp/aur-build
+
+          # ===========================================
+          # Download official packages with dependencies
+          # ===========================================
+          echo ""
+          echo "Downloading official packages..."
+
+          # Read target packages into array
+          mapfile -t TARGET_PACKAGES < <(grep -v '^#' archiso/airootfs/root/target-packages.x86_64 | grep -v '^$')
+
+          echo "Packages to download: ${#TARGET_PACKAGES[@]}"
+
+          # Download packages with all dependencies
+          # Using a blank database forces pacman to download all dependencies
+          pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${TARGET_PACKAGES[@]}"
+
+          echo ""
+          echo "Official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
+
+          # ===========================================
+          # Build AUR packages
+          # ===========================================
+          echo ""
+          echo "Building AUR packages..."
+
+          cd /tmp/aur-build
+
+          # Read AUR packages and build each one
+          while IFS= read -r package; do
+            # Skip empty lines and comments
+            [[ -z "$package" || "$package" =~ ^# ]] && continue
+
+            echo ""
+            echo "::group::Building AUR package: $package"
+
+            # Clone the AUR package
+            sudo -u builder git clone "https://aur.archlinux.org/${package}.git"
+
+            cd "$package"
+
+            # Build the package (install dependencies automatically)
+            sudo -u builder makepkg -s --noconfirm --skippgpcheck
+
+            # Copy built package to offline repo
+            cp *.pkg.tar.zst /tmp/offline-repo/
+
+            cd /tmp/aur-build
+            echo "::endgroup::"
+          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64"
+
+          echo ""
+          echo "AUR packages built successfully"
+
+          # ===========================================
+          # Create repository database
+          # ===========================================
+          echo ""
+          echo "Creating repository database..."
+
+          cd /tmp/offline-repo
+          repo-add offline.db.tar.zst *.pkg.tar.zst
+
+          echo ""
+          echo "Repository database created"
+
+          # ===========================================
+          # Copy repository to airootfs
+          # ===========================================
+          echo ""
+          echo "Copying repository to ISO airootfs..."
+
+          mkdir -p "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo"
+          cp /tmp/offline-repo/*.pkg.tar.zst "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+          cp /tmp/offline-repo/offline.db* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+          cp /tmp/offline-repo/offline.files* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+
+          # Show repository stats
+          echo ""
+          echo "=========================================="
+          echo "Offline repository complete!"
+          echo "=========================================="
+          echo "Total packages: $(ls "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"*.pkg.tar.zst | wc -l)"
+          echo "Repository size: $(du -sh "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/" | cut -f1)"
+          echo "=========================================="
+
       - name: Build ISO
         run: |
           cd archiso
