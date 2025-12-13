@@ -308,7 +308,24 @@ jobs:
           pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${TARGET_PACKAGES[@]}"
 
           echo ""
-          echo "Official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
+          echo "Target packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
+
+          # ===========================================
+          # Download setup script packages (GPU drivers, printer, firewall, etc.)
+          # These are included in the offline repo but NOT auto-installed
+          # ===========================================
+          echo ""
+          echo "Downloading setup script packages (GPU drivers, printer, etc.)..."
+
+          mapfile -t SETUP_PACKAGES < <(grep -v '^#' archiso/airootfs/root/setup-packages.x86_64 | grep -v '^$')
+
+          echo "Setup packages to download: ${#SETUP_PACKAGES[@]}"
+
+          # Download with dependencies - some may already exist from target packages
+          pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${SETUP_PACKAGES[@]}" || true
+
+          echo ""
+          echo "Total official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
 
           # Clear pacman cache to free disk space
           # Build dependencies (archiso, etc.) aren't needed in offline repo
@@ -418,6 +435,16 @@ jobs:
               MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
             fi
           done < "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64"
+
+          # Check all setup script packages (GPU drivers, printer, firewall, etc.)
+          echo "Checking setup packages..."
+          while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
+            if ! echo "$REPO_PACKAGES" | grep -qx "$pkg"; then
+              echo "❌ Missing: $pkg"
+              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+            fi
+          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/setup-packages.x86_64"
 
           if [[ -n "$MISSING_PACKAGES" ]]; then
             echo ""
