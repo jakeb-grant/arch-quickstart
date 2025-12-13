@@ -144,6 +144,18 @@ validate_offline_repo() {
         done < "$aur_packages_file"
     fi
 
+    # Check setup script packages (GPU drivers, printer, firewall, etc.)
+    local setup_packages_file="/root/setup-packages.x86_64"
+    if [[ -f "$setup_packages_file" ]]; then
+        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pkg// }" ]] && continue
+            if ! echo "$available_packages" | grep -qx "$pkg"; then
+                missing_packages+=("$pkg")
+            fi
+        done < "$setup_packages_file"
+    fi
+
     # Report results
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
         warn "WARNING: ${#missing_packages[@]} packages missing from offline repository:"

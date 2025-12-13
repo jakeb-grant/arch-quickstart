@@ -1,0 +1,74 @@
+# Setup script packages
+# These packages are included in the offline repository but NOT auto-installed.
+# They are installed on-demand by the setup scripts (nvidia-setup, printer-setup, etc.)
+
+# =============================================================================
+# GPU - NVIDIA
+# =============================================================================
+# Proprietary driver (Pascal and older)
+nvidia-dkms
+# Open kernel modules (Turing and newer - required for Blackwell)
+nvidia-open-dkms
+# Userspace utilities
+nvidia-utils
+lib32-nvidia-utils
+# Wayland support
+egl-wayland
+# Hardware video acceleration
+libva-nvidia-driver
+# Configuration GUI
+nvidia-settings
+
+# =============================================================================
+# GPU - Intel
+# =============================================================================
+# Core Mesa drivers
+mesa
+lib32-mesa
+# Vulkan support
+vulkan-intel
+lib32-vulkan-intel
+# VA-API drivers (modern GPUs - Broadwell+)
+intel-media-driver
+# VA-API drivers (legacy GPUs - pre-Broadwell)
+libva-intel-driver
+# VA-API utilities
+libva-utils
+# Intel Arc compute runtime
+intel-compute-runtime
+
+# =============================================================================
+# GPU - AMD
+# =============================================================================
+# Note: mesa and lib32-mesa are listed under Intel but shared with AMD
+# Vulkan support
+vulkan-radeon
+lib32-vulkan-radeon
+# VA-API hardware video acceleration
+libva-mesa-driver
+lib32-libva-mesa-driver
+# VDPAU video acceleration
+mesa-vdpau
+lib32-mesa-vdpau
+# Vulkan utilities
+vulkan-tools
+
+# =============================================================================
+# Firewall
+# =============================================================================
+ufw
+
+# =============================================================================
+# Printing (CUPS)
+# =============================================================================
+cups
+cups-pdf
+ghostscript
+gsfonts
+gutenprint
+foomatic-db-engine
+foomatic-db
+foomatic-db-ppds
+foomatic-db-nonfree
+foomatic-db-nonfree-ppds
+system-config-printer
