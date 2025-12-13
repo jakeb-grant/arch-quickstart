@@ -1,14 +1,15 @@
 # AUR packages installed on the target system
 # One package per line, comments starting with # are ignored
-# ORDER MATTERS: Dependencies must be listed before packages that need them
+#
+# Note: yay-bin is built first manually, then yay installs the rest.
+# yay handles dependency resolution automatically, so order doesn't matter.
 
-# Yay AUR helper (installed first, required for other AUR packages)
+# Yay AUR helper (always built first)
 yay-bin
 
-# Elephant indexer (required by walker-bin and elephant-* providers)
+# Walker application launcher and Elephant indexer
+walker-bin
 elephant
-
-# Elephant providers for Walker
 elephant-desktopapplications
 elephant-windows
 elephant-clipboard
@@ -17,9 +18,6 @@ elephant-runner
 elephant-files
 elephant-archlinuxpkgs
 elephant-menus
-
-# Walker application launcher (depends on elephant)
-walker-bin
 
 # Awww wallpaper system
 awww-git
