@@ -321,7 +321,8 @@ jobs:
           echo ""
           echo "Enabling multilib repository..."
           sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
-          pacman -Sy
+          # Sync multilib database to the blank dbpath used for downloads
+          pacman -Sy --dbpath /tmp/blankdb
 
           mapfile -t SETUP_PACKAGES < <(grep -v '^#' archiso/airootfs/root/setup-packages.x86_64 | grep -v '^$')
 
