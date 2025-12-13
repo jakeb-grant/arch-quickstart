@@ -150,6 +150,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Free up disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Clean pacman cache
+          pacman -Scc --noconfirm 2>/dev/null || true
+          # Remove docs and unnecessary locale files
+          rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* 2>/dev/null || true
+          rm -rf /usr/share/locale/* 2>/dev/null || true
+          echo "Disk space after cleanup:"
+          df -h /
+
       - name: Initialize pacman keyring
         run: |
           pacman-key --init
@@ -365,6 +377,19 @@ jobs:
           echo "Total packages: $(ls "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"*.pkg.tar.zst | wc -l)"
           echo "Repository size: $(du -sh "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/" | cut -f1)"
           echo "=========================================="
+
+          # ===========================================
+          # Clean up to free disk space before ISO build
+          # ===========================================
+          echo ""
+          echo "Cleaning up temporary files..."
+          rm -rf /tmp/offline-repo
+          rm -rf /tmp/aur-build
+          rm -rf /tmp/blankdb
+          rm -rf /home/builder/.cache/yay
+          pacman -Scc --noconfirm 2>/dev/null || true
+          echo "Disk space available:"
+          df -h /
 
       - name: Build ISO
         run: |
