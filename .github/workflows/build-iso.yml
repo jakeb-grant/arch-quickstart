@@ -211,6 +211,7 @@ jobs:
           cd /tmp/aur-build
 
           # Read AUR packages and build each one
+          # Note: Packages are built AND installed so later packages can depend on earlier ones
           while IFS= read -r package; do
             # Skip empty lines and comments
             [[ -z "$package" || "$package" =~ ^# ]] && continue
@@ -225,6 +226,10 @@ jobs:
 
             # Build the package (install dependencies automatically)
             sudo -u builder makepkg -s --noconfirm --skippgpcheck
+
+            # Install the package so it's available as a dependency for later packages
+            # This is needed for packages like elephant-* that depend on elephant
+            pacman -U --noconfirm *.pkg.tar.zst
 
             # Copy built package to offline repo
             cp *.pkg.tar.zst /tmp/offline-repo/
