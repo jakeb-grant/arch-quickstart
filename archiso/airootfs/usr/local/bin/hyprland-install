@@ -737,8 +737,14 @@ configure_system() {
 
     # Copy pacman.conf with multilib enabled
     info "  Copying pacman.conf (multilib enabled)..."
-    cp /etc/pacman.conf /mnt/etc/pacman.conf
-    cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        # In offline mode, keep the offline pacman.conf (set during install_base)
+        # Just ensure mirrorlist is copied for future online updates
+        cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+    else
+        cp /etc/pacman.conf /mnt/etc/pacman.conf
+        cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+    fi
 
     # Timezone
     info "  Setting timezone..."
