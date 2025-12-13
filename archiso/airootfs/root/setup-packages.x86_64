@@ -47,9 +47,7 @@ lib32-vulkan-radeon
 # VA-API hardware video acceleration
 libva-mesa-driver
 lib32-libva-mesa-driver
-# VDPAU video acceleration
-mesa-vdpau
-lib32-mesa-vdpau
+# Note: VDPAU drivers are now included in mesa (since 24.2.7-1)
 # Vulkan utilities
 vulkan-tools
 
