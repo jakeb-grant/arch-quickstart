@@ -135,17 +135,13 @@ fi
 header "Selecting Packages"
 
 PACKAGES=(
-    # Core Mesa drivers (OpenGL + VDPAU - merged since Mesa 24.2.7)
+    # Core Mesa drivers (OpenGL, VA-API, VDPAU - all merged since Mesa 24.2.x)
     "mesa"
     "lib32-mesa"
 
     # Vulkan support
     "vulkan-radeon"
     "lib32-vulkan-radeon"
-
-    # VA-API hardware video acceleration
-    "libva-mesa-driver"
-    "lib32-libva-mesa-driver"
 
     # Vulkan utilities
     "vulkan-tools"
