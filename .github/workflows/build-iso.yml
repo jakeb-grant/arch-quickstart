@@ -22,10 +22,11 @@ env:
   ISO_NAME: ${{ github.event.inputs.iso_name || 'archlinux-custom' }}
 
 jobs:
-  build:
+  # =============================================================================
+  # Online ISO Build (Fast, smaller ISO, requires internet during installation)
+  # =============================================================================
+  build-online:
     runs-on: ubuntu-latest
-    # Security: Only run on PRs from the same repo (not forks)
-    # This prevents external users from triggering builds
     if: |
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
@@ -58,12 +59,9 @@ jobs:
           echo ""
           echo "Validating packages in archiso/packages.x86_64 (live ISO)..."
           while IFS= read -r package; do
-            # Skip empty lines and comments
             if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
               continue
             fi
-
-            # Check if package exists in repositories
             if ! pacman -Si "$package" &>/dev/null; then
               echo "❌ Invalid package: $package"
               INVALID_PACKAGES="$INVALID_PACKAGES $package"
@@ -76,12 +74,9 @@ jobs:
           echo ""
           echo "Validating packages in archiso/airootfs/root/target-packages.x86_64 (installed system)..."
           while IFS= read -r package; do
-            # Skip empty lines and comments
             if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
               continue
             fi
-
-            # Check if package exists in repositories
             if ! pacman -Si "$package" &>/dev/null; then
               echo "❌ Invalid package: $package"
               INVALID_PACKAGES="$INVALID_PACKAGES $package"
@@ -94,8 +89,118 @@ jobs:
             echo ""
             echo "ERROR: The following official packages were not found in the repositories:"
             echo "$INVALID_PACKAGES"
+            exit 1
+          fi
+
+          echo ""
+          echo "All official packages validated successfully!"
+
+      - name: Build ISO
+        run: |
+          cd archiso
+          mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
+
+      - name: Get ISO filename and rename
+        id: iso-info
+        run: |
+          ISO_FILE=$(ls /tmp/archiso-out/*.iso 2>/dev/null | head -1)
+          if [ -z "$ISO_FILE" ]; then
+            echo "No ISO file found!"
+            exit 1
+          fi
+          # Rename to indicate online variant
+          NEW_NAME=$(basename "$ISO_FILE" .iso)-online.iso
+          mv "$ISO_FILE" "/tmp/archiso-out/$NEW_NAME"
+          ISO_SIZE=$(du -h "/tmp/archiso-out/$NEW_NAME" | cut -f1)
+          echo "iso_name=$NEW_NAME" >> $GITHUB_OUTPUT
+          echo "iso_size=$ISO_SIZE" >> $GITHUB_OUTPUT
+          echo "Built ISO: $NEW_NAME ($ISO_SIZE)"
+
+      - name: Generate checksums
+        run: |
+          cd /tmp/archiso-out
+          sha256sum *.iso > SHA256SUMS
+          sha512sum *.iso > SHA512SUMS
+          cat SHA256SUMS
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archlinux-custom-iso-online
+          path: |
+            /tmp/archiso-out/*.iso
+            /tmp/archiso-out/SHA256SUMS
+            /tmp/archiso-out/SHA512SUMS
+          retention-days: 7
+          compression-level: 0
+
+  # =============================================================================
+  # Offline ISO Build (Slower, larger ISO, no internet required for installation)
+  # =============================================================================
+  build-offline:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize pacman keyring
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+
+      - name: Update system and install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm archiso mkinitcpio-archiso grub dosfstools squashfs-tools libisoburn curl jq
+
+      - name: Validate package lists
+        run: |
+          echo "Ensuring package databases are synchronized..."
+          pacman -Sy
+
+          INVALID_PACKAGES=""
+
+          # Validate live ISO packages
+          echo ""
+          echo "Validating packages in archiso/packages.x86_64 (live ISO)..."
+          while IFS= read -r package; do
+            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
+              continue
+            fi
+            if ! pacman -Si "$package" &>/dev/null; then
+              echo "❌ Invalid package: $package"
+              INVALID_PACKAGES="$INVALID_PACKAGES $package"
+            else
+              echo "✓ Valid package: $package"
+            fi
+          done < archiso/packages.x86_64
+
+          # Validate target system packages
+          echo ""
+          echo "Validating packages in archiso/airootfs/root/target-packages.x86_64 (installed system)..."
+          while IFS= read -r package; do
+            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
+              continue
+            fi
+            if ! pacman -Si "$package" &>/dev/null; then
+              echo "❌ Invalid package: $package"
+              INVALID_PACKAGES="$INVALID_PACKAGES $package"
+            else
+              echo "✓ Valid package: $package"
+            fi
+          done < archiso/airootfs/root/target-packages.x86_64
+
+          if [[ -n "$INVALID_PACKAGES" ]]; then
             echo ""
-            echo "Please fix the package names in the package lists"
+            echo "ERROR: The following official packages were not found in the repositories:"
+            echo "$INVALID_PACKAGES"
             exit 1
           fi
 
@@ -108,7 +213,6 @@ jobs:
 
           AUR_PACKAGES=""
           while IFS= read -r package; do
-            # Skip empty lines and comments
             if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
               continue
             fi
@@ -116,27 +220,22 @@ jobs:
           done < archiso/airootfs/root/aur-packages.x86_64
 
           if [[ -n "$AUR_PACKAGES" ]]; then
-            # Build query URL with all packages
             QUERY_ARGS=""
             for pkg in $AUR_PACKAGES; do
               QUERY_ARGS="${QUERY_ARGS}&arg[]=${pkg}"
             done
-            QUERY_ARGS="${QUERY_ARGS:1}"  # Remove leading &
+            QUERY_ARGS="${QUERY_ARGS:1}"
 
-            # Query AUR API
             AUR_RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${QUERY_ARGS}")
 
-            # Check for API errors
             if ! echo "$AUR_RESPONSE" | jq -e '.type == "multiinfo"' > /dev/null 2>&1; then
               echo "ERROR: Failed to query AUR API"
               echo "$AUR_RESPONSE"
               exit 1
             fi
 
-            # Get list of found packages
             FOUND_PACKAGES=$(echo "$AUR_RESPONSE" | jq -r '.results[].Name')
 
-            # Check each package
             INVALID_AUR=""
             for pkg in $AUR_PACKAGES; do
               if echo "$FOUND_PACKAGES" | grep -q "^${pkg}$"; then
@@ -151,15 +250,11 @@ jobs:
               echo ""
               echo "ERROR: The following AUR packages were not found:"
               echo "$INVALID_AUR"
-              echo ""
-              echo "Please fix the package names in aur-packages.x86_64"
               exit 1
             fi
 
             echo ""
             echo "All AUR packages validated successfully!"
-          else
-            echo "No AUR packages to validate"
           fi
 
           echo ""
@@ -173,10 +268,9 @@ jobs:
 
           # Create build user for AUR packages (makepkg cannot run as root)
           useradd -m builder
-          # Give builder passwordless sudo for installing dependencies during makepkg
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-          # Install additional build dependencies (including sudo for makepkg -s)
+          # Install additional build dependencies
           pacman -S --noconfirm --needed git base-devel sudo
 
           # Create directories
@@ -191,13 +285,10 @@ jobs:
           echo ""
           echo "Downloading official packages..."
 
-          # Read target packages into array
           mapfile -t TARGET_PACKAGES < <(grep -v '^#' archiso/airootfs/root/target-packages.x86_64 | grep -v '^$')
 
           echo "Packages to download: ${#TARGET_PACKAGES[@]}"
 
-          # Download packages with all dependencies
-          # Using a blank database forces pacman to download all dependencies
           pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${TARGET_PACKAGES[@]}"
 
           echo ""
@@ -211,7 +302,7 @@ jobs:
 
           cd /tmp/aur-build
 
-          # Step 1: Build and install yay-bin first (needed to install other AUR packages)
+          # Step 1: Build and install yay-bin first
           echo ""
           echo "::group::Building yay-bin (AUR helper)"
           su -s /bin/bash builder -c "git clone https://aur.archlinux.org/yay-bin.git"
@@ -231,15 +322,13 @@ jobs:
             echo "::group::Installing AUR packages with yay"
             echo "Packages: ${AUR_PACKAGES[*]}"
 
-            # Step 3: Use yay to install all packages (handles dependency resolution automatically)
-            # Run as builder user who has sudo access
+            # Use yay to install all packages (handles dependency resolution)
             su -s /bin/bash builder -c "yay -S --noconfirm --needed ${AUR_PACKAGES[*]}"
             echo "::endgroup::"
 
-            # Step 4: Copy built AUR packages from yay's cache to offline repo
+            # Copy built AUR packages from yay's cache
             echo ""
             echo "Copying AUR packages to offline repository..."
-            # yay stores built packages in user's cache
             cp /home/builder/.cache/yay/*/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
           fi
 
@@ -269,7 +358,6 @@ jobs:
           cp /tmp/offline-repo/offline.db* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
           cp /tmp/offline-repo/offline.files* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
 
-          # Show repository stats
           echo ""
           echo "=========================================="
           echo "Offline repository complete!"
@@ -283,7 +371,7 @@ jobs:
           cd archiso
           mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
 
-      - name: Get ISO filename
+      - name: Get ISO filename and rename
         id: iso-info
         run: |
           ISO_FILE=$(ls /tmp/archiso-out/*.iso 2>/dev/null | head -1)
@@ -291,12 +379,13 @@ jobs:
             echo "No ISO file found!"
             exit 1
           fi
-          ISO_BASENAME=$(basename "$ISO_FILE")
-          ISO_SIZE=$(du -h "$ISO_FILE" | cut -f1)
-          echo "iso_file=$ISO_FILE" >> $GITHUB_OUTPUT
-          echo "iso_name=$ISO_BASENAME" >> $GITHUB_OUTPUT
+          # Rename to indicate offline variant
+          NEW_NAME=$(basename "$ISO_FILE" .iso)-offline.iso
+          mv "$ISO_FILE" "/tmp/archiso-out/$NEW_NAME"
+          ISO_SIZE=$(du -h "/tmp/archiso-out/$NEW_NAME" | cut -f1)
+          echo "iso_name=$NEW_NAME" >> $GITHUB_OUTPUT
           echo "iso_size=$ISO_SIZE" >> $GITHUB_OUTPUT
-          echo "Built ISO: $ISO_BASENAME ($ISO_SIZE)"
+          echo "Built ISO: $NEW_NAME ($ISO_SIZE)"
 
       - name: Generate checksums
         run: |
@@ -308,7 +397,7 @@ jobs:
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
-          name: archlinux-custom-iso
+          name: archlinux-custom-iso-offline
           path: |
             /tmp/archiso-out/*.iso
             /tmp/archiso-out/SHA256SUMS
@@ -316,14 +405,41 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      - name: Create Release (on tag push)
-        if: startsWith(github.ref, 'refs/tags/')
+  # =============================================================================
+  # Create Release (runs after both builds complete, only on tag push)
+  # =============================================================================
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-online, build-offline]
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download online ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: archlinux-custom-iso-online
+          path: release/online
+
+      - name: Download offline ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: archlinux-custom-iso-offline
+          path: release/offline
+
+      - name: Combine checksums
+        run: |
+          cd release
+          cat online/SHA256SUMS offline/SHA256SUMS > SHA256SUMS
+          cat online/SHA512SUMS offline/SHA512SUMS > SHA512SUMS
+
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            /tmp/archiso-out/*.iso
-            /tmp/archiso-out/SHA256SUMS
-            /tmp/archiso-out/SHA512SUMS
+            release/online/*.iso
+            release/offline/*.iso
+            release/SHA256SUMS
+            release/SHA512SUMS
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
