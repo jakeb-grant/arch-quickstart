@@ -204,112 +204,133 @@ jobs:
     if: |
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    container:
-      image: archlinux:latest
-      options: --privileged
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Free up disk space
+      # Free up disk space on the runner BEFORE starting the container
+      # This is critical for the offline ISO which needs ~8GB for packages + squashfs
+      - name: Free up disk space on runner
         run: |
           echo "Disk space before cleanup:"
           df -h /
-          # Clean pacman cache
-          pacman -Scc --noconfirm 2>/dev/null || true
-          # Remove docs and unnecessary locale files
-          rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* 2>/dev/null || true
-          rm -rf /usr/share/locale/* 2>/dev/null || true
+
+          # Remove large pre-installed components we don't need
+          echo "Removing Android SDK (~8GB)..."
+          sudo rm -rf /usr/local/lib/android || true
+
+          echo "Removing .NET (~2GB)..."
+          sudo rm -rf /usr/share/dotnet || true
+
+          echo "Removing Haskell..."
+          sudo rm -rf /opt/ghc /usr/local/.ghcup || true
+
+          echo "Removing Swift..."
+          sudo rm -rf /usr/share/swift || true
+
+          echo "Removing Go..."
+          sudo rm -rf /usr/local/go || true
+
+          echo "Removing CodeQL..."
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+
+          echo "Removing pre-installed browsers..."
+          sudo rm -rf /opt/google /opt/microsoft || true
+
+          echo "Removing docs and cached packages..."
+          sudo rm -rf /var/cache/apt/archives/* || true
+          sudo rm -rf /usr/share/doc/* /usr/share/man/* || true
+
+          # Docker images we don't need
+          echo "Removing unused Docker images..."
+          docker image prune -af 2>/dev/null || true
+
+          echo ""
           echo "Disk space after cleanup:"
           df -h /
 
-      - name: Initialize pacman keyring
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build in Arch Linux container
         run: |
+          # Run the entire build process in a single container
+          # Mount workspace to /workspace inside container
+          docker run --rm --privileged \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "/tmp:/tmp" \
+            -e GITHUB_WORKSPACE=/workspace \
+            -e DOTFILES_REPO="${{ github.event.inputs.dotfiles_repo }}" \
+            -w /workspace \
+            archlinux:latest bash -c '
+          set -e
+
+          echo "=========================================="
+          echo "Initializing Arch Linux environment"
+          echo "=========================================="
+
           pacman-key --init
           pacman-key --populate archlinux
-
-      - name: Update system and install dependencies
-        run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm archiso mkinitcpio-archiso grub dosfstools squashfs-tools libisoburn curl jq
+          pacman -S --noconfirm archiso mkinitcpio-archiso grub dosfstools squashfs-tools libisoburn curl jq git base-devel sudo
 
-      - name: Validate package lists
-        run: |
-          echo "Enabling multilib repository for lib32 package validation..."
-          if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
-            echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          echo ""
+          echo "Disk space available:"
+          df -h /
+
+          echo ""
+          echo "=========================================="
+          echo "Validating package lists"
+          echo "=========================================="
+
+          # Enable multilib for lib32 package validation
+          if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+            echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> /etc/pacman.conf
           fi
-
-          echo "Ensuring package databases are synchronized..."
           pacman -Sy
 
           INVALID_PACKAGES=""
 
-          # Validate live ISO packages
           echo ""
-          echo "Validating packages in archiso/packages.x86_64 (live ISO)..."
+          echo "Validating live ISO packages..."
           while IFS= read -r package; do
-            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
-              continue
-            fi
+            [[ -z "$package" ]] || [[ "$package" =~ ^# ]] && continue
             if ! pacman -Si "$package" &>/dev/null; then
-              echo "❌ Invalid package: $package"
+              echo "❌ Invalid: $package"
               INVALID_PACKAGES="$INVALID_PACKAGES $package"
-            else
-              echo "✓ Valid package: $package"
             fi
           done < archiso/packages.x86_64
 
-          # Validate target system packages
           echo ""
-          echo "Validating packages in archiso/airootfs/root/target-packages.x86_64 (installed system)..."
+          echo "Validating target system packages..."
           while IFS= read -r package; do
-            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
-              continue
-            fi
+            [[ -z "$package" ]] || [[ "$package" =~ ^# ]] && continue
             if ! pacman -Si "$package" &>/dev/null; then
-              echo "❌ Invalid package: $package"
+              echo "❌ Invalid: $package"
               INVALID_PACKAGES="$INVALID_PACKAGES $package"
-            else
-              echo "✓ Valid package: $package"
             fi
           done < archiso/airootfs/root/target-packages.x86_64
 
-          # Validate setup script packages (GPU drivers, printer, firewall, etc.)
           echo ""
-          echo "Validating packages in archiso/airootfs/root/setup-packages.x86_64 (setup scripts)..."
+          echo "Validating setup script packages..."
           while IFS= read -r package; do
-            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
-              continue
-            fi
+            [[ -z "$package" ]] || [[ "$package" =~ ^# ]] && continue
             if ! pacman -Si "$package" &>/dev/null; then
-              echo "❌ Invalid package: $package"
+              echo "❌ Invalid: $package"
               INVALID_PACKAGES="$INVALID_PACKAGES $package"
-            else
-              echo "✓ Valid package: $package"
             fi
           done < archiso/airootfs/root/setup-packages.x86_64
 
           if [[ -n "$INVALID_PACKAGES" ]]; then
-            echo ""
-            echo "ERROR: The following official packages were not found in the repositories:"
-            echo "$INVALID_PACKAGES"
+            echo "ERROR: Invalid packages:$INVALID_PACKAGES"
             exit 1
           fi
+          echo "✓ All official packages validated"
 
+          # Validate AUR packages via API
           echo ""
-          echo "All official packages validated successfully!"
-
-          # Validate AUR packages
-          echo ""
-          echo "Validating packages in archiso/airootfs/root/aur-packages.x86_64 (AUR)..."
-
+          echo "Validating AUR packages..."
           AUR_PACKAGES=""
           while IFS= read -r package; do
-            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
-              continue
-            fi
+            [[ -z "$package" ]] || [[ "$package" =~ ^# ]] && continue
             AUR_PACKAGES="$AUR_PACKAGES $package"
           done < archiso/airootfs/root/aur-packages.x86_64
 
@@ -319,123 +340,60 @@ jobs:
               QUERY_ARGS="${QUERY_ARGS}&arg[]=${pkg}"
             done
             QUERY_ARGS="${QUERY_ARGS:1}"
-
             AUR_RESPONSE=$(curl -s "https://aur.archlinux.org/rpc/v5/info?${QUERY_ARGS}")
-
-            if ! echo "$AUR_RESPONSE" | jq -e '.type == "multiinfo"' > /dev/null 2>&1; then
-              echo "ERROR: Failed to query AUR API"
-              echo "$AUR_RESPONSE"
-              exit 1
-            fi
-
-            FOUND_PACKAGES=$(echo "$AUR_RESPONSE" | jq -r '.results[].Name')
-
+            FOUND_PACKAGES=$(echo "$AUR_RESPONSE" | jq -r ".results[].Name")
             INVALID_AUR=""
             for pkg in $AUR_PACKAGES; do
-              if echo "$FOUND_PACKAGES" | grep -q "^${pkg}$"; then
-                echo "✓ Valid AUR package: $pkg"
-              else
-                echo "❌ Invalid AUR package: $pkg"
+              if ! echo "$FOUND_PACKAGES" | grep -qx "$pkg"; then
+                echo "❌ Invalid AUR: $pkg"
                 INVALID_AUR="$INVALID_AUR $pkg"
               fi
             done
-
             if [[ -n "$INVALID_AUR" ]]; then
-              echo ""
-              echo "ERROR: The following AUR packages were not found:"
-              echo "$INVALID_AUR"
+              echo "ERROR: Invalid AUR packages:$INVALID_AUR"
               exit 1
             fi
-
-            echo ""
-            echo "All AUR packages validated successfully!"
+            echo "✓ All AUR packages validated"
           fi
 
           echo ""
-          echo "All package validation complete!"
-
-      - name: Build offline package repository
-        run: |
           echo "=========================================="
           echo "Building offline package repository"
           echo "=========================================="
 
-          # Create build user for AUR packages (makepkg cannot run as root)
+          # Create build user for AUR packages
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-          # Install additional build dependencies
-          pacman -S --noconfirm --needed git base-devel sudo
-
-          # Create directories
           mkdir -p /tmp/offline-repo
           mkdir -p /tmp/aur-build
           mkdir -p /tmp/blankdb/local
           chown builder:builder /tmp/aur-build
 
-          # ===========================================
-          # Download official packages with dependencies
-          # ===========================================
+          # Download official packages
           echo ""
-          echo "Downloading official packages..."
-
-          mapfile -t TARGET_PACKAGES < <(grep -v '^#' archiso/airootfs/root/target-packages.x86_64 | grep -v '^$')
-
-          echo "Packages to download: ${#TARGET_PACKAGES[@]}"
-
+          echo "Downloading target packages..."
+          mapfile -t TARGET_PACKAGES < <(grep -v "^#" archiso/airootfs/root/target-packages.x86_64 | grep -v "^$")
           pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${TARGET_PACKAGES[@]}"
 
-          echo ""
-          echo "Target packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
-
-          # ===========================================
-          # Download setup script packages (GPU drivers, printer, firewall, etc.)
-          # These are included in the offline repo but NOT auto-installed
-          # ===========================================
-          echo ""
-          echo "Downloading setup script packages (GPU drivers, printer, etc.)..."
-
-          # Enable multilib repository for lib32 packages (GPU drivers need 32-bit support)
-          echo ""
-          echo "Enabling multilib repository..."
-          if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
-            echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
-          fi
-          # Sync all databases including multilib to the blank dbpath used for downloads
+          # Sync multilib to blankdb
           pacman -Sy --dbpath /tmp/blankdb
 
-          mapfile -t SETUP_PACKAGES < <(grep -v '^#' archiso/airootfs/root/setup-packages.x86_64 | grep -v '^$')
-
-          echo "Setup packages to download: ${#SETUP_PACKAGES[@]}"
-
-          # Download with dependencies
+          echo ""
+          echo "Downloading setup packages (GPU drivers, etc.)..."
+          mapfile -t SETUP_PACKAGES < <(grep -v "^#" archiso/airootfs/root/setup-packages.x86_64 | grep -v "^$")
           pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${SETUP_PACKAGES[@]}"
 
-          echo ""
-          echo "Total official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
-
-          # Clean up: Remove blank database (no longer needed after downloads)
           rm -rf /tmp/blankdb
-
-          # Clear pacman cache to free disk space
-          # Build dependencies (archiso, etc.) aren't needed in offline repo
-          # Target packages are already in /tmp/offline-repo
-          echo ""
-          echo "Clearing build dependency cache to free disk space..."
           pacman -Scc --noconfirm 2>/dev/null || true
-          echo "Disk space available: $(df -h / | tail -1 | awk '{print $4}')"
+          echo "Official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
 
-          # ===========================================
-          # Build AUR packages using yay
-          # ===========================================
+          # Build AUR packages
           echo ""
           echo "Building AUR packages..."
-
           cd /tmp/aur-build
 
-          # Step 1: Build and install yay-bin first
-          echo ""
-          echo "::group::Building yay-bin (AUR helper)"
+          echo "::group::Building yay-bin"
           su -s /bin/bash builder -c "git clone https://aur.archlinux.org/yay-bin.git"
           cd yay-bin
           chown -R builder:builder .
@@ -445,175 +403,94 @@ jobs:
           cd /tmp/aur-build
           echo "::endgroup::"
 
-          # Step 2: Read remaining AUR packages (excluding yay-bin)
-          mapfile -t AUR_PACKAGES < <(grep -v '^#' "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64" | grep -v '^$' | grep -v '^yay-bin$')
+          mapfile -t AUR_PACKAGES < <(grep -v "^#" /workspace/archiso/airootfs/root/aur-packages.x86_64 | grep -v "^$" | grep -v "^yay-bin$")
 
           if [[ ${#AUR_PACKAGES[@]} -gt 0 ]]; then
-            echo ""
             echo "::group::Installing AUR packages with yay"
-            echo "Packages: ${AUR_PACKAGES[*]}"
-
-            # Use yay to install all packages (handles dependency resolution)
-            # This will fail the build if any package fails to install
             su -s /bin/bash builder -c "yay -S --noconfirm --needed ${AUR_PACKAGES[*]}"
             echo "::endgroup::"
 
-            # Copy built AUR packages from yay's cache
-            echo ""
-            echo "Copying AUR packages to offline repository..."
-            YAY_PKG_COUNT=$(find /home/builder/.cache/yay -name "*.pkg.tar.zst" 2>/dev/null | wc -l)
-            if [[ "$YAY_PKG_COUNT" -eq 0 ]]; then
-              echo "ERROR: No AUR packages found in yay cache!"
-              exit 1
-            fi
-            echo "Found $YAY_PKG_COUNT packages in yay cache"
             cp /home/builder/.cache/yay/*/*.pkg.tar.zst /tmp/offline-repo/
-
-            # Also copy any dependencies yay installed from official repos
-            echo ""
-            echo "Copying official repo dependencies installed by yay..."
-            PACMAN_PKG_COUNT=$(find /var/cache/pacman/pkg -name "*.pkg.tar.zst" 2>/dev/null | wc -l)
-            echo "Found $PACMAN_PKG_COUNT packages in pacman cache"
-            if [[ "$PACMAN_PKG_COUNT" -gt 0 ]]; then
-              cp -n /var/cache/pacman/pkg/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
-            fi
-
-            # Clean up immediately to free disk space (packages already copied)
-            echo ""
-            echo "Cleaning up AUR build artifacts..."
-            rm -rf /home/builder/.cache/yay
-            rm -rf /tmp/aur-build
-            pacman -Scc --noconfirm 2>/dev/null || true
-            echo "Disk space available: $(df -h / | tail -1 | awk '{print $4}')"
+            cp -n /var/cache/pacman/pkg/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
           fi
 
-          echo ""
-          echo "AUR packages built successfully"
+          rm -rf /home/builder/.cache/yay /tmp/aur-build
+          pacman -Scc --noconfirm 2>/dev/null || true
 
-          # ===========================================
           # Create repository database
-          # ===========================================
           echo ""
           echo "Creating repository database..."
-
           cd /tmp/offline-repo
           repo-add offline.db.tar.zst *.pkg.tar.zst
 
+          # Validate completeness
           echo ""
-          echo "Repository database created"
+          echo "Validating repository completeness..."
+          REPO_PACKAGES=$(tar --wildcards -xf offline.db.tar.zst -O "*/desc" | awk "/^%NAME%$/{getline; print}")
+          MISSING=""
 
-          # ===========================================
-          # Validate repository completeness
-          # ===========================================
-          echo ""
-          echo "Validating offline repository completeness..."
-
-          # Get list of packages in the repo by reading %NAME% fields from desc files
-          # This is more reliable than parsing directory names which fail for packages with hyphens
-          REPO_PACKAGES=$(tar --wildcards -xf offline.db.tar.zst -O '*/desc' | awk '/^%NAME%$/{getline; print}')
-
-          MISSING_PACKAGES=""
-
-          # Check all target packages
-          echo "Checking target packages..."
           while IFS= read -r pkg || [[ -n "$pkg" ]]; do
             [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
-            if ! echo "$REPO_PACKAGES" | grep -qx "$pkg"; then
-              echo "❌ Missing: $pkg"
-              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
-            fi
-          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/target-packages.x86_64"
+            echo "$REPO_PACKAGES" | grep -qx "$pkg" || MISSING="$MISSING $pkg"
+          done < /workspace/archiso/airootfs/root/target-packages.x86_64
 
-          # Check all AUR packages
-          echo "Checking AUR packages..."
           while IFS= read -r pkg || [[ -n "$pkg" ]]; do
             [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
-            if ! echo "$REPO_PACKAGES" | grep -qx "$pkg"; then
-              echo "❌ Missing: $pkg"
-              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
-            fi
-          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64"
+            echo "$REPO_PACKAGES" | grep -qx "$pkg" || MISSING="$MISSING $pkg"
+          done < /workspace/archiso/airootfs/root/aur-packages.x86_64
 
-          # Check all setup script packages (GPU drivers, printer, firewall, etc.)
-          echo "Checking setup packages..."
           while IFS= read -r pkg || [[ -n "$pkg" ]]; do
             [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
-            if ! echo "$REPO_PACKAGES" | grep -qx "$pkg"; then
-              echo "❌ Missing: $pkg"
-              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
-            fi
-          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/setup-packages.x86_64"
+            echo "$REPO_PACKAGES" | grep -qx "$pkg" || MISSING="$MISSING $pkg"
+          done < /workspace/archiso/airootfs/root/setup-packages.x86_64
 
-          if [[ -n "$MISSING_PACKAGES" ]]; then
-            echo ""
-            echo "=========================================="
-            echo "ERROR: Offline repository is incomplete!"
-            echo "Missing packages:$MISSING_PACKAGES"
-            echo "=========================================="
+          if [[ -n "$MISSING" ]]; then
+            echo "ERROR: Missing packages:$MISSING"
             exit 1
           fi
+          echo "✓ All packages present"
 
-          echo "✓ All required packages present in offline repository"
-
-          # ===========================================
-          # Move repository to airootfs (mv instead of cp to save disk space)
-          # ===========================================
+          # Move to airootfs
           echo ""
-          echo "Moving repository to ISO airootfs..."
-
-          mkdir -p "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo"
-          # Use mv instead of cp to avoid having two copies (saves ~2-3GB)
-          mv /tmp/offline-repo/*.pkg.tar.zst "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
-          mv /tmp/offline-repo/offline.db* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
-          mv /tmp/offline-repo/offline.files* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
-
-          # Clean up empty directory
+          echo "Moving repository to airootfs..."
+          mkdir -p /workspace/archiso/airootfs/opt/offline-repo
+          mv /tmp/offline-repo/*.pkg.tar.zst /workspace/archiso/airootfs/opt/offline-repo/
+          mv /tmp/offline-repo/offline.db* /workspace/archiso/airootfs/opt/offline-repo/
+          mv /tmp/offline-repo/offline.files* /workspace/archiso/airootfs/opt/offline-repo/
           rm -rf /tmp/offline-repo
 
-          echo ""
-          echo "=========================================="
-          echo "Offline repository complete!"
-          echo "=========================================="
-          echo "Total packages: $(ls "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"*.pkg.tar.zst | wc -l)"
-          echo "Repository size: $(du -sh "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/" | cut -f1)"
-          echo "=========================================="
+          echo "Repository size: $(du -sh /workspace/archiso/airootfs/opt/offline-repo/ | cut -f1)"
+          echo "Disk space available: $(df -h / | tail -1 | awk "{print \$4}")"
 
-          # Final cleanup and disk space check
+          # Clone dotfiles (optional)
+          if [[ -n "$DOTFILES_REPO" ]]; then
+            echo ""
+            echo "Cloning dotfiles from: $DOTFILES_REPO"
+            git clone --depth 1 "$DOTFILES_REPO" /workspace/archiso/airootfs/opt/dotfiles || true
+          elif [[ -f /workspace/archiso/dotfiles.conf ]]; then
+            source /workspace/archiso/dotfiles.conf
+            if [[ -n "$DOTFILES_REPO" ]]; then
+              echo ""
+              echo "Cloning dotfiles from config: $DOTFILES_REPO"
+              git clone --depth 1 "$DOTFILES_REPO" /workspace/archiso/airootfs/opt/dotfiles || true
+            fi
+          fi
+
           echo ""
-          echo "Final disk space available before ISO build:"
+          echo "=========================================="
+          echo "Building ISO"
+          echo "=========================================="
           df -h /
 
-      - name: Clone dotfiles repository (optional)
-        run: |
-          # Determine dotfiles repo: workflow input takes precedence, then config file
-          DOTFILES_REPO="${{ github.event.inputs.dotfiles_repo }}"
-
-          if [[ -z "$DOTFILES_REPO" ]] && [[ -f "$GITHUB_WORKSPACE/archiso/dotfiles.conf" ]]; then
-            source "$GITHUB_WORKSPACE/archiso/dotfiles.conf"
-          fi
-
-          if [[ -z "$DOTFILES_REPO" ]]; then
-            echo "No dotfiles repository specified, skipping..."
-            exit 0
-          fi
-
-          echo "Cloning dotfiles from: $DOTFILES_REPO"
-          mkdir -p "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles"
-
-          if git clone --depth 1 "$DOTFILES_REPO" "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles"; then
-            echo "Dotfiles cloned successfully!"
-            echo "Contents:"
-            ls -la "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles"
-          else
-            echo "WARNING: Failed to clone dotfiles repository"
-            echo "The offline ISO will be built without pre-loaded dotfiles"
-            rmdir "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles" 2>/dev/null || true
-          fi
-
-      - name: Build ISO
-        run: |
-          cd archiso
+          cd /workspace/archiso
           mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
+
+          echo ""
+          echo "=========================================="
+          echo "ISO build complete!"
+          echo "=========================================="
+          ls -lh /tmp/archiso-out/
+          '
 
       - name: Get ISO filename and rename
         id: iso-info
