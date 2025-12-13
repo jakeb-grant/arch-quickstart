@@ -173,10 +173,11 @@ jobs:
 
           # Create build user for AUR packages (makepkg cannot run as root)
           useradd -m builder
+          # Give builder passwordless sudo for installing dependencies during makepkg
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-          # Install additional build dependencies
-          pacman -S --noconfirm --needed git base-devel
+          # Install additional build dependencies (including sudo for makepkg -s)
+          pacman -S --noconfirm --needed git base-devel sudo
 
           # Create directories
           mkdir -p /tmp/offline-repo
@@ -219,13 +220,15 @@ jobs:
             echo ""
             echo "::group::Building AUR package: $package"
 
-            # Clone the AUR package
-            sudo -u builder git clone "https://aur.archlinux.org/${package}.git"
+            # Clone the AUR package (use su to run as builder user)
+            su -s /bin/bash builder -c "git clone https://aur.archlinux.org/${package}.git"
 
             cd "$package"
+            chown -R builder:builder .
 
             # Build the package (install dependencies automatically)
-            sudo -u builder makepkg -s --noconfirm --skippgpcheck
+            # builder user has sudo access for installing deps via makepkg -s
+            su -s /bin/bash builder -c "makepkg -s --noconfirm --skippgpcheck"
 
             # Install the package so it's available as a dependency for later packages
             # This is needed for packages like elephant-* that depend on elephant
