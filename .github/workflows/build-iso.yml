@@ -55,7 +55,9 @@ jobs:
       - name: Validate package lists
         run: |
           echo "Enabling multilib repository for lib32 package validation..."
-          echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+            echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          fi
 
           echo "Ensuring package databases are synchronized..."
           pacman -Sy
@@ -182,7 +184,9 @@ jobs:
       - name: Validate package lists
         run: |
           echo "Enabling multilib repository for lib32 package validation..."
-          echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+            echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          fi
 
           echo "Ensuring package databases are synchronized..."
           pacman -Sy
@@ -341,8 +345,9 @@ jobs:
           # Enable multilib repository for lib32 packages (GPU drivers need 32-bit support)
           echo ""
           echo "Enabling multilib repository..."
-          # Append multilib to pacman.conf (more reliable than uncommenting)
-          echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+            echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          fi
           # Sync all databases including multilib to the blank dbpath used for downloads
           pacman -Sy --dbpath /tmp/blankdb
 
