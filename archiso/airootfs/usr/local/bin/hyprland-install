@@ -21,6 +21,10 @@ export GUM_SPIN_SPINNER_FOREGROUND="#89b4fa"
 PACKAGES_FILE="/root/target-packages.x86_64"
 CONFIG_FILE="/root/install.conf"
 
+# Offline installation mode
+OFFLINE_REPO="/opt/offline-repo"
+OFFLINE_MODE=0
+
 # Load configuration defaults
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -70,11 +74,42 @@ header() {
 }
 
 # -----------------------------------------------------------------------------
+# Offline Mode Detection
+# -----------------------------------------------------------------------------
+
+detect_offline_mode() {
+    if [[ -d "$OFFLINE_REPO" ]] && [[ -f "$OFFLINE_REPO/offline.db.tar.zst" ]]; then
+        OFFLINE_MODE=1
+        return 0
+    fi
+    OFFLINE_MODE=0
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # Network Check
 # -----------------------------------------------------------------------------
 
 check_network() {
     header
+
+    # In offline mode, network is optional (only needed for dotfiles)
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        success "Offline mode: All packages are pre-installed on this ISO"
+        echo
+        info "Checking network connectivity (optional for dotfiles)..."
+        echo
+
+        if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+            success "Network connected! (dotfiles setup will be available)"
+        else
+            warn "No network connection - dotfiles setup will be skipped"
+        fi
+        sleep 2
+        return 0
+    fi
+
+    # Online mode - network is required
     info "Checking network connectivity..."
     echo
 
@@ -172,6 +207,17 @@ connect_wifi() {
 
 welcome() {
     header
+
+    # Show installation mode
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        gum style \
+            --foreground="#a6e3a1" \
+            --bold \
+            --padding "0 2" \
+            "OFFLINE MODE - All packages pre-installed on ISO"
+        echo
+    fi
+
     gum style \
         --padding "1 2" \
         --margin "0 2" \
@@ -619,10 +665,6 @@ install_base() {
     pacman-key --init
     pacman-key --populate archlinux
 
-    # Sync package databases
-    info "Syncing package databases..."
-    pacman -Sy
-
     # Pre-configure locale in target before package install
     # Some packages check locale during installation
     info "Pre-configuring locale..."
@@ -641,11 +683,35 @@ install_base() {
     fi
 
     info "Installing ${#packages[@]} packages..."
-    info "This will take several minutes..."
     echo
 
-    # Install packages with pacstrap
-    pacstrap -K /mnt "${packages[@]}"
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        # Offline installation using local repository
+        info "Using offline repository (no download required)..."
+        echo
+
+        # Copy offline repository to target
+        mkdir -p /mnt/opt/offline-repo
+        cp -r "$OFFLINE_REPO"/* /mnt/opt/offline-repo/
+
+        # Create pacman.conf for target that uses offline repo
+        mkdir -p /mnt/etc/pacman.d
+        cp /etc/pacman.d/offline-pacman.conf /mnt/etc/pacman.conf
+
+        # Install packages with pacstrap using offline config
+        pacstrap -C /etc/pacman.d/offline-pacman.conf -K /mnt "${packages[@]}"
+    else
+        # Online installation (original behavior)
+        info "This will take several minutes (downloading packages)..."
+        echo
+
+        # Sync package databases
+        info "Syncing package databases..."
+        pacman -Sy
+
+        # Install packages with pacstrap
+        pacstrap -K /mnt "${packages[@]}"
+    fi
 
     # Verify installation succeeded
     if [[ ! -x /mnt/usr/bin/ln ]]; then
@@ -951,11 +1017,25 @@ install_aur_packages() {
     info "Packages to install: ${aur_packages[*]}"
     echo
 
-    # Use user's home directory (guaranteed to exist after useradd -m)
-    local script_path="/mnt/home/$USERNAME/install-aur.sh"
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        # Offline mode: AUR packages are already in the offline repository
+        info "Installing pre-built AUR packages from offline repository..."
+        echo
 
-    # Create a script to run as the user for AUR installation
-    cat > "$script_path" << AURSCRIPT
+        # Install each AUR package directly with pacman (they're in the offline repo)
+        for pkg in "${aur_packages[@]}"; do
+            info "  Installing $pkg..."
+            arch-chroot /mnt pacman -S --noconfirm "$pkg" 2>/dev/null || {
+                warn "  Package $pkg not found in offline repo, skipping..."
+            }
+        done
+    else
+        # Online mode: Build AUR packages with yay
+        # Use user's home directory (guaranteed to exist after useradd -m)
+        local script_path="/mnt/home/$USERNAME/install-aur.sh"
+
+        # Create a script to run as the user for AUR installation
+        cat > "$script_path" << AURSCRIPT
 #!/bin/bash
 set -e
 
@@ -974,19 +1054,20 @@ fi
 yay -S --noconfirm ${aur_packages[*]}
 AURSCRIPT
 
-    chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
-    chmod +x "$script_path"
+        chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
+        chmod +x "$script_path"
 
-    # Verify script exists
-    if [[ ! -f "$script_path" ]]; then
-        die "Failed to create AUR install script!"
+        # Verify script exists
+        if [[ ! -f "$script_path" ]]; then
+            die "Failed to create AUR install script!"
+        fi
+
+        info "Building and installing yay (AUR helper)..."
+        arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh"
+
+        # Cleanup
+        rm -f "$script_path"
     fi
-
-    info "Building and installing yay (AUR helper)..."
-    arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh"
-
-    # Cleanup
-    rm -f "$script_path"
 
     success "AUR packages installed!"
     sleep 1
@@ -1043,6 +1124,48 @@ setup_dotfiles() {
 finish() {
     header
 
+    # Restore standard pacman.conf for online updates after installation
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        info "Configuring system for online updates..."
+
+        # Create standard pacman.conf (without offline repo)
+        cat > /mnt/etc/pacman.conf << 'PACMANCONF'
+#
+# /etc/pacman.conf
+#
+# See the pacman.conf(5) manpage for option and repository directives
+
+[options]
+HoldPkg     = pacman glibc
+Architecture = auto
+
+# Misc options
+CheckSpace
+ParallelDownloads = 5
+Color
+VerbosePkgLists
+
+SigLevel    = Required DatabaseOptional
+LocalFileSigLevel = Optional
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+PACMANCONF
+
+        # Optionally remove offline repo to save disk space
+        # Uncomment the following line if you want to remove it:
+        # rm -rf /mnt/opt/offline-repo
+
+        success "System configured for online updates"
+        echo
+    fi
+
     gum style \
         --border rounded \
         --border-foreground="#a6e3a1" \
@@ -1091,6 +1214,9 @@ main() {
     if ! command -v gum &>/dev/null; then
         die "gum is not installed!"
     fi
+
+    # Detect if offline repository is available
+    detect_offline_mode
 
     welcome
     select_disk
