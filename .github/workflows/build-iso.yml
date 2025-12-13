@@ -412,7 +412,7 @@ jobs:
 
           # Get list of packages in the repo by reading %NAME% fields from desc files
           # This is more reliable than parsing directory names which fail for packages with hyphens
-          REPO_PACKAGES=$(tar -xf offline.db.tar.zst -O '*/desc' | awk '/^%NAME%$/{getline; print}')
+          REPO_PACKAGES=$(tar --wildcards -xf offline.db.tar.zst -O '*/desc' | awk '/^%NAME%$/{getline; print}')
 
           MISSING_PACKAGES=""
 
