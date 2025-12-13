@@ -317,12 +317,18 @@ jobs:
           echo ""
           echo "Downloading setup script packages (GPU drivers, printer, etc.)..."
 
+          # Enable multilib repository for lib32 packages (GPU drivers need 32-bit support)
+          echo ""
+          echo "Enabling multilib repository..."
+          sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+          pacman -Sy
+
           mapfile -t SETUP_PACKAGES < <(grep -v '^#' archiso/airootfs/root/setup-packages.x86_64 | grep -v '^$')
 
           echo "Setup packages to download: ${#SETUP_PACKAGES[@]}"
 
-          # Download with dependencies - some may already exist from target packages
-          pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${SETUP_PACKAGES[@]}" || true
+          # Download with dependencies
+          pacman -Syw --noconfirm --cachedir /tmp/offline-repo --dbpath /tmp/blankdb "${SETUP_PACKAGES[@]}"
 
           echo ""
           echo "Total official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
