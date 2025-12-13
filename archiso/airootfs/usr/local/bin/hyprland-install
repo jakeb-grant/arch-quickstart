@@ -175,6 +175,24 @@ test_network() {
     return 1
 }
 
+# Try to bring up ethernet via DHCP
+bring_up_ethernet() {
+    local iface
+    # Find ethernet interfaces (en* or eth*)
+    for iface in /sys/class/net/en* /sys/class/net/eth*; do
+        [[ -e "$iface" ]] || continue
+        iface=$(basename "$iface")
+        # Skip if already has an IP
+        if ip addr show "$iface" | grep -q 'inet '; then
+            continue
+        fi
+        info "  Requesting IP for $iface..."
+        # Try dhcpcd (timeout after 10 seconds)
+        timeout 10 dhcpcd -w "$iface" 2>/dev/null && return 0
+    done
+    return 1
+}
+
 check_network() {
     header
 
@@ -205,6 +223,18 @@ check_network() {
         return 0
     fi
 
+    # No connection - try to bring up ethernet via DHCP
+    info "No connection detected, attempting to configure ethernet..."
+    echo
+    if bring_up_ethernet; then
+        sleep 2
+        if test_network; then
+            success "Network connected!"
+            sleep 1
+            return 0
+        fi
+    fi
+
     warn "No internet connection detected."
     echo
 
@@ -216,7 +246,7 @@ check_network() {
             die "Internet connection required for installation."
         fi
     else
-        die "No network connection. Please connect via ethernet and restart."
+        die "No network connection. Please check your network settings and restart."
     fi
 }
 
