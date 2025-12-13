@@ -204,42 +204,44 @@ jobs:
           echo "Official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
 
           # ===========================================
-          # Build AUR packages
+          # Build AUR packages using yay
           # ===========================================
           echo ""
           echo "Building AUR packages..."
 
           cd /tmp/aur-build
 
-          # Read AUR packages and build each one
-          # Note: Packages are built AND installed so later packages can depend on earlier ones
-          while IFS= read -r package; do
-            # Skip empty lines and comments
-            [[ -z "$package" || "$package" =~ ^# ]] && continue
+          # Step 1: Build and install yay-bin first (needed to install other AUR packages)
+          echo ""
+          echo "::group::Building yay-bin (AUR helper)"
+          su -s /bin/bash builder -c "git clone https://aur.archlinux.org/yay-bin.git"
+          cd yay-bin
+          chown -R builder:builder .
+          su -s /bin/bash builder -c "makepkg -s --noconfirm --skippgpcheck"
+          pacman -U --noconfirm *.pkg.tar.zst
+          cp *.pkg.tar.zst /tmp/offline-repo/
+          cd /tmp/aur-build
+          echo "::endgroup::"
 
+          # Step 2: Read remaining AUR packages (excluding yay-bin)
+          mapfile -t AUR_PACKAGES < <(grep -v '^#' "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64" | grep -v '^$' | grep -v '^yay-bin$')
+
+          if [[ ${#AUR_PACKAGES[@]} -gt 0 ]]; then
             echo ""
-            echo "::group::Building AUR package: $package"
+            echo "::group::Installing AUR packages with yay"
+            echo "Packages: ${AUR_PACKAGES[*]}"
 
-            # Clone the AUR package (use su to run as builder user)
-            su -s /bin/bash builder -c "git clone https://aur.archlinux.org/${package}.git"
-
-            cd "$package"
-            chown -R builder:builder .
-
-            # Build the package (install dependencies automatically)
-            # builder user has sudo access for installing deps via makepkg -s
-            su -s /bin/bash builder -c "makepkg -s --noconfirm --skippgpcheck"
-
-            # Install the package so it's available as a dependency for later packages
-            # This is needed for packages like elephant-* that depend on elephant
-            pacman -U --noconfirm *.pkg.tar.zst
-
-            # Copy built package to offline repo
-            cp *.pkg.tar.zst /tmp/offline-repo/
-
-            cd /tmp/aur-build
+            # Step 3: Use yay to install all packages (handles dependency resolution automatically)
+            # Run as builder user who has sudo access
+            su -s /bin/bash builder -c "yay -S --noconfirm --needed ${AUR_PACKAGES[*]}"
             echo "::endgroup::"
-          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64"
+
+            # Step 4: Copy built AUR packages from yay's cache to offline repo
+            echo ""
+            echo "Copying AUR packages to offline repository..."
+            # yay stores built packages in user's cache
+            cp /home/builder/.cache/yay/*/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
+          fi
 
           echo ""
           echo "AUR packages built successfully"
