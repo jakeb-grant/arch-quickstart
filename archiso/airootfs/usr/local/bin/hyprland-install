@@ -102,18 +102,24 @@ validate_offline_repo() {
 
     local missing_packages=()
     local available_packages
+    local db_file="$OFFLINE_REPO/offline.db.tar.zst"
 
-    # Create temp db path for checking
-    mkdir -p /tmp/pacman-db-check/sync
-    if ! cp "$OFFLINE_REPO"/*.db* /tmp/pacman-db-check/sync/ 2>/dev/null; then
-        warn "Could not read offline repository database"
+    # Check if database exists
+    if [[ ! -f "$db_file" ]]; then
+        warn "Could not find offline repository database"
         warn "Skipping validation"
-        rm -rf /tmp/pacman-db-check
         return 0
     fi
 
-    # Get list of packages available in offline repo
-    available_packages=$(pacman -Sl --dbpath /tmp/pacman-db-check offline 2>/dev/null | awk '{print $2}' || true)
+    # Extract package names from the database (same method as workflow)
+    # Format in db: packagename-version-release/
+    available_packages=$(tar -tf "$db_file" 2>/dev/null | grep -E '^[^/]+/$' | sed 's|/||' | sed 's|-[^-]*-[^-]*$||')
+
+    if [[ -z "$available_packages" ]]; then
+        warn "Could not read offline repository database"
+        warn "Skipping validation"
+        return 0
+    fi
 
     # Check target packages
     if [[ -f "$PACKAGES_FILE" ]]; then
@@ -137,9 +143,6 @@ validate_offline_repo() {
             fi
         done < "$aur_packages_file"
     fi
-
-    # Cleanup
-    rm -rf /tmp/pacman-db-check
 
     # Report results
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
