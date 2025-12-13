@@ -17,6 +17,10 @@ on:
         description: 'Custom ISO name (optional)'
         required: false
         default: ''
+      dotfiles_repo:
+        description: 'Dotfiles repo URL for offline ISO (optional, e.g., https://github.com/user/dotfiles)'
+        required: false
+        default: ''
 
 env:
   ISO_NAME: ${{ github.event.inputs.iso_name || 'archlinux-custom' }}
@@ -456,6 +460,33 @@ jobs:
           pacman -Scc --noconfirm 2>/dev/null || true
           echo "Disk space available:"
           df -h /
+
+      - name: Clone dotfiles repository (optional)
+        run: |
+          # Determine dotfiles repo: workflow input takes precedence, then config file
+          DOTFILES_REPO="${{ github.event.inputs.dotfiles_repo }}"
+
+          if [[ -z "$DOTFILES_REPO" ]] && [[ -f "$GITHUB_WORKSPACE/archiso/dotfiles.conf" ]]; then
+            source "$GITHUB_WORKSPACE/archiso/dotfiles.conf"
+          fi
+
+          if [[ -z "$DOTFILES_REPO" ]]; then
+            echo "No dotfiles repository specified, skipping..."
+            exit 0
+          fi
+
+          echo "Cloning dotfiles from: $DOTFILES_REPO"
+          mkdir -p "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles"
+
+          if git clone --depth 1 "$DOTFILES_REPO" "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles"; then
+            echo "Dotfiles cloned successfully!"
+            echo "Contents:"
+            ls -la "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles"
+          else
+            echo "WARNING: Failed to clone dotfiles repository"
+            echo "The offline ISO will be built without pre-loaded dotfiles"
+            rmdir "$GITHUB_WORKSPACE/archiso/airootfs/opt/dotfiles" 2>/dev/null || true
+          fi
 
       - name: Build ISO
         run: |

@@ -1178,9 +1178,49 @@ setup_dotfiles() {
     info "Dotfiles Setup"
     echo
 
-    if ! gum confirm --default=false "Would you like to set up dotfiles using chezmoi?"; then
+    local dotfiles_source=""
+    local local_dotfiles="/opt/dotfiles"
+
+    # Check for pre-loaded dotfiles on the ISO (offline mode)
+    if [[ -d "$local_dotfiles" ]] && [[ -d "$local_dotfiles/.git" ]]; then
+        success "Found pre-loaded dotfiles on ISO!"
+        echo
+
+        if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
+            # Copy dotfiles to target system
+            info "Copying dotfiles to installed system..."
+            mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi-source"
+            cp -r "$local_dotfiles"/* "/mnt/home/$USERNAME/.local/share/chezmoi-source/"
+            arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
+
+            info "Applying dotfiles with chezmoi..."
+            arch-chroot /mnt sudo -u "$USERNAME" chezmoi init --source="/home/$USERNAME/.local/share/chezmoi-source" --apply || {
+                warn "Dotfiles setup encountered an error."
+                warn "You can run 'chezmoi init --apply' after rebooting."
+                sleep 2
+                return
+            }
+
+            success "Dotfiles applied successfully!"
+            sleep 1
+            return
+        else
+            info "Skipping pre-loaded dotfiles."
+        fi
+    fi
+
+    # No local dotfiles or user declined - prompt for remote repo
+    if ! gum confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
         info "Skipping dotfiles setup."
         sleep 1
+        return
+    fi
+
+    # Check if we have network connectivity
+    if ! ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        warn "No network connection available."
+        warn "You can run 'dotfiles-setup <repo>' after rebooting."
+        sleep 2
         return
     fi
 
