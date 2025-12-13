@@ -151,6 +151,16 @@ prime-run glxinfo | grep "OpenGL renderer"
 - Adds Hyprland environment variables
 - Auto-enables multilib if needed
 
+##### AMD ROCm (GPU Compute)
+
+ROCm is **not installed by default** due to its large size (~500MB+). If you need GPU compute capabilities (OpenCL, machine learning with PyTorch/TensorFlow, Blender GPU rendering), run `amd-setup` manually after installation:
+
+```bash
+amd-setup  # Will prompt to install ROCm packages
+```
+
+This requires network access as ROCm packages are not included in the offline ISO.
+
 #### System Features
 
 ```bash
@@ -202,7 +212,7 @@ Two ISO variants are built automatically:
 | Variant | Size | Internet Required | Use Case |
 |---------|------|-------------------|----------|
 | **Online** | ~1.2 GB | Yes (during install) | Fast build, always latest packages |
-| **Offline** | ~2.5 GB | No | Air-gapped installs, unreliable network |
+| **Offline** | ~5-6 GB | No | Air-gapped installs, unreliable network |
 
 ### Online ISO
 - Smaller download
@@ -212,9 +222,11 @@ Two ISO variants are built automatically:
 
 ### Offline ISO
 - All packages pre-built and embedded
-- No network required for base installation
+- No network required for full installation (including GPU drivers)
+- Includes all GPU drivers (NVIDIA, Intel, AMD) - correct ones installed based on detected hardware
+- Includes printer drivers, firewall, and Bluetooth packages
 - Includes pre-loaded dotfiles (optional)
-- Network only needed for custom dotfiles from a different repo
+- Network only needed for: custom dotfiles from a different repo, or AMD ROCm compute packages
 
 ## Building the ISO
 
@@ -277,6 +289,20 @@ Packages installed on the target system (the full Hyprland desktop). This is the
 
 AUR packages installed via yay on the target system. Comments (lines starting with `#`) and blank lines are ignored.
 
+### `archiso/airootfs/root/setup-packages.x86_64` - Setup Script Packages
+
+Packages included in the offline repository but **not auto-installed**. These are installed on-demand by the setup scripts:
+
+| Category | Packages | Used By |
+|----------|----------|---------|
+| NVIDIA | `nvidia-dkms`, `nvidia-open-dkms`, `nvidia-utils`, etc. | `nvidia-setup` |
+| Intel | `mesa`, `vulkan-intel`, `intel-media-driver`, etc. | `intel-setup` |
+| AMD | `vulkan-radeon`, `libva-mesa-driver`, etc. | `amd-setup` |
+| Firewall | `ufw` | `firewall-setup` |
+| Printing | `cups`, `ghostscript`, `gutenprint`, etc. | `printer-setup` |
+
+This architecture allows the offline ISO to support any hardware configuration without installing unnecessary drivers. The correct packages are installed based on detected hardware during the setup phase.
+
 ### `archiso/packages.x86_64` - Live ISO Packages
 
 Packages included in the live environment (for installation/rescue).
@@ -302,8 +328,9 @@ archiso/
 │   │   └── dotfiles/          # Pre-cloned dotfiles (offline ISO only)
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
-│   │   ├── target-packages.x86_64  # Target system packages
-│   │   └── aur-packages.x86_64     # AUR packages
+│   │   ├── target-packages.x86_64  # Target system packages (always installed)
+│   │   ├── aur-packages.x86_64     # AUR packages (always installed)
+│   │   └── setup-packages.x86_64   # Setup script packages (on-demand)
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
 │       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
