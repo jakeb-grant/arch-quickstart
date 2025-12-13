@@ -105,19 +105,31 @@ connect_wifi() {
     info "Scanning for WiFi networks..."
     echo
 
-    # Make sure NetworkManager is running
-    systemctl start NetworkManager 2>/dev/null || true
+    # Make sure iwd is running
+    systemctl start iwd 2>/dev/null || true
     sleep 2
+
+    # Get WiFi interface name
+    local wifi_device
+    wifi_device=$(iwctl device list 2>/dev/null | awk '/station/{print $2}' | head -1)
+
+    if [[ -z "$wifi_device" ]]; then
+        die "No WiFi device found!"
+    fi
+
+    # Scan for networks
+    iwctl station "$wifi_device" scan 2>/dev/null || true
+    sleep 3
 
     # Get list of WiFi networks
     local networks
-    networks=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -v '^$' | sort -u)
+    networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | tail -n +5 | awk '{print $1}' | grep -v '^$' | sort -u)
 
     if [[ -z "$networks" ]]; then
         warn "No WiFi networks found. Rescanning..."
-        nmcli dev wifi rescan 2>/dev/null || true
+        iwctl station "$wifi_device" scan 2>/dev/null || true
         sleep 3
-        networks=$(nmcli -t -f SSID dev wifi list 2>/dev/null | grep -v '^$' | sort -u)
+        networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | tail -n +5 | awk '{print $1}' | grep -v '^$' | sort -u)
     fi
 
     if [[ -z "$networks" ]]; then
@@ -137,7 +149,7 @@ connect_wifi() {
     wifi_password=$(gum input --password --placeholder "WiFi password")
 
     info "Connecting to '$ssid'..."
-    if nmcli dev wifi connect "$ssid" password "$wifi_password" 2>&1; then
+    if iwctl --passphrase "$wifi_password" station "$wifi_device" connect "$ssid" 2>&1; then
         sleep 2
         if ping -c 1 -W 3 archlinux.org &>/dev/null; then
             success "Connected to WiFi!"
@@ -170,12 +182,7 @@ welcome() {
         "  • SDDM display manager" \
         "  • Waybar, Walker, Ghostty" \
         "  • Firefox, Nautilus" \
-        "  • Pipewire audio" \
-        "" \
-        "The installation will:" \
-        "  • Erase the selected disk completely" \
-        "  • Create GPT partitions (EFI + BTRFS root)" \
-        "  • Install all packages and configure the system"
+        "  • Pipewire audio"
 
     echo
     if ! gum confirm "Ready to proceed?"; then
@@ -194,6 +201,7 @@ select_disk() {
     echo
 
     # Get list of disks (exclude loop devices and rom)
+    local disks
     mapfile -t disks < <(lsblk -dpno NAME,SIZE,MODEL | grep -E '^/dev/(sd|nvme|vd)' | sort)
 
     if [[ ${#disks[@]} -eq 0 ]]; then
@@ -583,7 +591,7 @@ mount_partitions() {
 
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$mount_device" /mnt
 
-    mkdir -p /mnt/{boot/efi,home,.snapshots,var/log,swap}
+    mkdir -p /mnt/{boot,home,.snapshots,var/log,swap}
 
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$mount_device" /mnt/home
     mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$mount_device" /mnt/.snapshots
@@ -591,7 +599,7 @@ mount_partitions() {
     # Swap subvolume: no compression, no copy-on-write
     mount -o noatime,nodatacow,subvol=@swap "$mount_device" /mnt/swap
 
-    mount "$EFI_PART" /mnt/boot/efi
+    mount "$EFI_PART" /mnt/boot
 
     success "Partitions mounted!"
     sleep 1
@@ -628,7 +636,7 @@ install_base() {
         mapfile -t packages < <(grep -v '^#' "$PACKAGES_FILE" | grep -v '^$')
     else
         # Fallback to essential packages if file not found
-        packages=(base linux linux-firmware grub efibootmgr networkmanager)
+        packages=(base linux linux-firmware grub efibootmgr iwd)
         warn "Package list not found, installing minimal system..."
     fi
 
@@ -721,9 +729,6 @@ EOF
         # Configure GRUB for encrypted root
         sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot\"|" /mnt/etc/default/grub
 
-        # Enable GRUB cryptodisk support
-        echo "GRUB_ENABLE_CRYPTODISK=y" >> /mnt/etc/default/grub
-
         # Regenerate initramfs
         info "  Regenerating initramfs..."
         arch-chroot /mnt mkinitcpio -P
@@ -731,13 +736,28 @@ EOF
 
     # Install bootloader
     info "  Installing GRUB bootloader..."
-    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
     arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
     # Enable services
     info "  Enabling services..."
-    arch-chroot /mnt systemctl enable NetworkManager
+    arch-chroot /mnt systemctl enable iwd
+    arch-chroot /mnt systemctl enable systemd-resolved
     arch-chroot /mnt systemctl enable sddm
+
+    # Configure iwd with systemd-resolved
+    info "  Configuring iwd..."
+    mkdir -p /mnt/etc/iwd
+    cat > /mnt/etc/iwd/main.conf << 'EOF'
+[General]
+EnableNetworkConfiguration=true
+
+[Network]
+NameResolvingService=systemd
+EOF
+
+    # Link resolv.conf to systemd-resolved
+    ln -sf /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf
 
     # Copy setup scripts to installed system
     info "  Installing setup scripts..."
@@ -973,6 +993,50 @@ AURSCRIPT
 }
 
 # -----------------------------------------------------------------------------
+# Dotfiles Setup (Optional)
+# -----------------------------------------------------------------------------
+
+setup_dotfiles() {
+    header
+    info "Dotfiles Setup"
+    echo
+
+    if ! gum confirm --default=false "Would you like to set up dotfiles using chezmoi?"; then
+        info "Skipping dotfiles setup."
+        sleep 1
+        return
+    fi
+
+    echo
+    info "Enter your GitHub username or full dotfiles repo URL:"
+    info "(e.g., 'jakeb-grant' or 'https://github.com/user/dotfiles.git')"
+    echo
+
+    local dotfiles_repo
+    dotfiles_repo=$(gum input --placeholder "GitHub username or repo URL")
+
+    if [[ -z "$dotfiles_repo" ]]; then
+        warn "No repository specified. Skipping dotfiles setup."
+        sleep 1
+        return
+    fi
+
+    info "Initializing dotfiles from: $dotfiles_repo"
+    echo
+
+    # Run chezmoi init as the user in the chroot
+    arch-chroot /mnt sudo -u "$USERNAME" chezmoi init "$dotfiles_repo" --apply || {
+        warn "Dotfiles setup encountered an error."
+        warn "You can run 'dotfiles-setup $dotfiles_repo' after rebooting."
+        sleep 2
+        return
+    }
+
+    success "Dotfiles applied successfully!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
 # Finish Installation
 # -----------------------------------------------------------------------------
 
@@ -1041,6 +1105,7 @@ main() {
     configure_swap
     install_extras
     install_aur_packages
+    setup_dotfiles
     finish
 }
 

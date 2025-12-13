@@ -1,12 +1,10 @@
 # Archiso systemd service presets
 
 # Enable these services by default
-enable NetworkManager.service
 enable sshd.service
 enable systemd-networkd.service
 enable systemd-resolved.service
 enable iwd.service
-enable ModemManager.service
 enable pacman-init.service
 enable choose-mirror.service
 enable reflector.service
