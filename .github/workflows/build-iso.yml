@@ -393,8 +393,9 @@ jobs:
           echo ""
           echo "Validating offline repository completeness..."
 
-          # Get list of packages in the repo
-          REPO_PACKAGES=$(tar -tf offline.db.tar.zst | grep -E '^[^/]+/$' | sed 's|/||' | sed 's|-[^-]*-[^-]*$||')
+          # Get list of packages in the repo by reading %NAME% fields from desc files
+          # This is more reliable than parsing directory names which fail for packages with hyphens
+          REPO_PACKAGES=$(tar -xf offline.db.tar.zst -O '*/desc' | awk '/^%NAME%$/{getline; print}')
 
           MISSING_PACKAGES=""
 

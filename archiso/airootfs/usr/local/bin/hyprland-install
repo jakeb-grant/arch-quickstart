@@ -111,9 +111,9 @@ validate_offline_repo() {
         return 0
     fi
 
-    # Extract package names from the database (same method as workflow)
-    # Format in db: packagename-version-release/
-    available_packages=$(tar -tf "$db_file" 2>/dev/null | grep -E '^[^/]+/$' | sed 's|/||' | sed 's|-[^-]*-[^-]*$||')
+    # Extract package names from the database by reading %NAME% fields from desc files
+    # This is more reliable than parsing directory names which fail for packages with hyphens
+    available_packages=$(tar -xf "$db_file" -O '*/desc' 2>/dev/null | awk '/^%NAME%$/{getline; print}')
 
     if [[ -z "$available_packages" ]]; then
         warn "Could not read offline repository database"
