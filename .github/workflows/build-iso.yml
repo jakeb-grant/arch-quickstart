@@ -320,8 +320,9 @@ jobs:
           # Enable multilib repository for lib32 packages (GPU drivers need 32-bit support)
           echo ""
           echo "Enabling multilib repository..."
-          sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
-          # Sync multilib database to the blank dbpath used for downloads
+          # Append multilib to pacman.conf (more reliable than uncommenting)
+          echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+          # Sync all databases including multilib to the blank dbpath used for downloads
           pacman -Sy --dbpath /tmp/blankdb
 
           mapfile -t SETUP_PACKAGES < <(grep -v '^#' archiso/airootfs/root/setup-packages.x86_64 | grep -v '^$')
