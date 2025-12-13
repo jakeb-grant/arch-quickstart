@@ -361,6 +361,9 @@ jobs:
           echo ""
           echo "Total official packages downloaded: $(ls /tmp/offline-repo/*.pkg.tar.zst 2>/dev/null | wc -l)"
 
+          # Clean up: Remove blank database (no longer needed after downloads)
+          rm -rf /tmp/blankdb
+
           # Clear pacman cache to free disk space
           # Build dependencies (archiso, etc.) aren't needed in offline repo
           # Target packages are already in /tmp/offline-repo
@@ -421,6 +424,14 @@ jobs:
             if [[ "$PACMAN_PKG_COUNT" -gt 0 ]]; then
               cp -n /var/cache/pacman/pkg/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
             fi
+
+            # Clean up immediately to free disk space (packages already copied)
+            echo ""
+            echo "Cleaning up AUR build artifacts..."
+            rm -rf /home/builder/.cache/yay
+            rm -rf /tmp/aur-build
+            pacman -Scc --noconfirm 2>/dev/null || true
+            echo "Disk space available: $(df -h / | tail -1 | awk '{print $4}')"
           fi
 
           echo ""
@@ -492,15 +503,19 @@ jobs:
           echo "✓ All required packages present in offline repository"
 
           # ===========================================
-          # Copy repository to airootfs
+          # Move repository to airootfs (mv instead of cp to save disk space)
           # ===========================================
           echo ""
-          echo "Copying repository to ISO airootfs..."
+          echo "Moving repository to ISO airootfs..."
 
           mkdir -p "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo"
-          cp /tmp/offline-repo/*.pkg.tar.zst "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
-          cp /tmp/offline-repo/offline.db* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
-          cp /tmp/offline-repo/offline.files* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+          # Use mv instead of cp to avoid having two copies (saves ~2-3GB)
+          mv /tmp/offline-repo/*.pkg.tar.zst "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+          mv /tmp/offline-repo/offline.db* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+          mv /tmp/offline-repo/offline.files* "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/"
+
+          # Clean up empty directory
+          rm -rf /tmp/offline-repo
 
           echo ""
           echo "=========================================="
@@ -510,17 +525,9 @@ jobs:
           echo "Repository size: $(du -sh "$GITHUB_WORKSPACE/archiso/airootfs/opt/offline-repo/" | cut -f1)"
           echo "=========================================="
 
-          # ===========================================
-          # Clean up to free disk space before ISO build
-          # ===========================================
+          # Final cleanup and disk space check
           echo ""
-          echo "Cleaning up temporary files..."
-          rm -rf /tmp/offline-repo
-          rm -rf /tmp/aur-build
-          rm -rf /tmp/blankdb
-          rm -rf /home/builder/.cache/yay
-          pacman -Scc --noconfirm 2>/dev/null || true
-          echo "Disk space available:"
+          echo "Final disk space available before ISO build:"
           df -h /
 
       - name: Clone dotfiles repository (optional)
