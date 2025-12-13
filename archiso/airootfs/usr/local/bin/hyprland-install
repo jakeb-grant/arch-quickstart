@@ -164,6 +164,17 @@ validate_offline_repo() {
 # Network Check
 # -----------------------------------------------------------------------------
 
+# Test network connectivity using HTTP (more reliable than ping/ICMP)
+test_network() {
+    # Try curl first (HTTP), fall back to ping (ICMP)
+    if curl -s --connect-timeout 5 --max-time 10 https://archlinux.org >/dev/null 2>&1; then
+        return 0
+    elif ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 check_network() {
     header
 
@@ -174,7 +185,7 @@ check_network() {
         info "Checking network connectivity (optional for dotfiles)..."
         echo
 
-        if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        if test_network; then
             success "Network connected! (dotfiles setup will be available)"
         else
             warn "No network connection - dotfiles setup will be skipped"
@@ -188,7 +199,7 @@ check_network() {
     echo
 
     # Test internet connectivity
-    if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+    if test_network; then
         success "Network connected!"
         sleep 1
         return 0
@@ -260,7 +271,7 @@ connect_wifi() {
     info "Connecting to '$ssid'..."
     if iwctl --passphrase "$wifi_password" station "$wifi_device" connect "$ssid" 2>&1; then
         sleep 2
-        if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        if test_network; then
             success "Connected to WiFi!"
             sleep 1
             return 0
@@ -1217,7 +1228,7 @@ setup_dotfiles() {
     fi
 
     # Check if we have network connectivity
-    if ! ping -c 1 -W 3 archlinux.org &>/dev/null; then
+    if ! test_network; then
         warn "No network connection available."
         warn "You can run 'dotfiles-setup <repo>' after rebooting."
         sleep 2
