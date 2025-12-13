@@ -335,13 +335,29 @@ jobs:
             echo "Packages: ${AUR_PACKAGES[*]}"
 
             # Use yay to install all packages (handles dependency resolution)
+            # This will fail the build if any package fails to install
             su -s /bin/bash builder -c "yay -S --noconfirm --needed ${AUR_PACKAGES[*]}"
             echo "::endgroup::"
 
             # Copy built AUR packages from yay's cache
             echo ""
             echo "Copying AUR packages to offline repository..."
-            cp /home/builder/.cache/yay/*/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
+            YAY_PKG_COUNT=$(find /home/builder/.cache/yay -name "*.pkg.tar.zst" 2>/dev/null | wc -l)
+            if [[ "$YAY_PKG_COUNT" -eq 0 ]]; then
+              echo "ERROR: No AUR packages found in yay cache!"
+              exit 1
+            fi
+            echo "Found $YAY_PKG_COUNT packages in yay cache"
+            cp /home/builder/.cache/yay/*/*.pkg.tar.zst /tmp/offline-repo/
+
+            # Also copy any dependencies yay installed from official repos
+            echo ""
+            echo "Copying official repo dependencies installed by yay..."
+            PACMAN_PKG_COUNT=$(find /var/cache/pacman/pkg -name "*.pkg.tar.zst" 2>/dev/null | wc -l)
+            echo "Found $PACMAN_PKG_COUNT packages in pacman cache"
+            if [[ "$PACMAN_PKG_COUNT" -gt 0 ]]; then
+              cp -n /var/cache/pacman/pkg/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
+            fi
           fi
 
           echo ""
@@ -358,6 +374,48 @@ jobs:
 
           echo ""
           echo "Repository database created"
+
+          # ===========================================
+          # Validate repository completeness
+          # ===========================================
+          echo ""
+          echo "Validating offline repository completeness..."
+
+          # Get list of packages in the repo
+          REPO_PACKAGES=$(tar -tf offline.db.tar.zst | grep -E '^[^/]+/$' | sed 's|/||' | sed 's|-[^-]*-[^-]*$||')
+
+          MISSING_PACKAGES=""
+
+          # Check all target packages
+          echo "Checking target packages..."
+          while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
+            if ! echo "$REPO_PACKAGES" | grep -qx "$pkg"; then
+              echo "❌ Missing: $pkg"
+              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+            fi
+          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/target-packages.x86_64"
+
+          # Check all AUR packages
+          echo "Checking AUR packages..."
+          while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
+            if ! echo "$REPO_PACKAGES" | grep -qx "$pkg"; then
+              echo "❌ Missing: $pkg"
+              MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+            fi
+          done < "$GITHUB_WORKSPACE/archiso/airootfs/root/aur-packages.x86_64"
+
+          if [[ -n "$MISSING_PACKAGES" ]]; then
+            echo ""
+            echo "=========================================="
+            echo "ERROR: Offline repository is incomplete!"
+            echo "Missing packages:$MISSING_PACKAGES"
+            echo "=========================================="
+            exit 1
+          fi
+
+          echo "✓ All required packages present in offline repository"
 
           # ===========================================
           # Copy repository to airootfs

@@ -87,6 +87,80 @@ detect_offline_mode() {
 }
 
 # -----------------------------------------------------------------------------
+# Offline Repository Validation
+# -----------------------------------------------------------------------------
+
+validate_offline_repo() {
+    # Only validate in offline mode
+    if [[ "$OFFLINE_MODE" -ne 1 ]]; then
+        return 0
+    fi
+
+    header
+    info "Validating offline repository..."
+    echo
+
+    local missing_packages=()
+    local available_packages
+
+    # Create temp db path for checking
+    mkdir -p /tmp/pacman-db-check/sync
+    if ! cp "$OFFLINE_REPO"/*.db* /tmp/pacman-db-check/sync/ 2>/dev/null; then
+        warn "Could not read offline repository database"
+        warn "Skipping validation"
+        rm -rf /tmp/pacman-db-check
+        return 0
+    fi
+
+    # Get list of packages available in offline repo
+    available_packages=$(pacman -Sl --dbpath /tmp/pacman-db-check offline 2>/dev/null | awk '{print $2}' || true)
+
+    # Check target packages
+    if [[ -f "$PACKAGES_FILE" ]]; then
+        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pkg// }" ]] && continue
+            if ! echo "$available_packages" | grep -qx "$pkg"; then
+                missing_packages+=("$pkg")
+            fi
+        done < "$PACKAGES_FILE"
+    fi
+
+    # Check AUR packages
+    local aur_packages_file="/root/aur-packages.x86_64"
+    if [[ -f "$aur_packages_file" ]]; then
+        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pkg// }" ]] && continue
+            if ! echo "$available_packages" | grep -qx "$pkg"; then
+                missing_packages+=("$pkg")
+            fi
+        done < "$aur_packages_file"
+    fi
+
+    # Cleanup
+    rm -rf /tmp/pacman-db-check
+
+    # Report results
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        warn "WARNING: ${#missing_packages[@]} packages missing from offline repository:"
+        echo
+        for pkg in "${missing_packages[@]}"; do
+            echo "  - $pkg"
+        done
+        echo
+        warn "These packages will fail to install in offline mode."
+        echo
+        if ! gum confirm --default=false "Continue anyway?"; then
+            die "Installation cancelled - offline repository incomplete"
+        fi
+    else
+        success "All required packages found in offline repository!"
+        sleep 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Network Check
 # -----------------------------------------------------------------------------
 
@@ -1028,13 +1102,29 @@ install_aur_packages() {
         info "Installing pre-built AUR packages from offline repository..."
         echo
 
+        # Track failed packages
+        local failed_packages=()
+
         # Install each AUR package directly with pacman (they're in the offline repo)
         for pkg in "${aur_packages[@]}"; do
             info "  Installing $pkg..."
-            arch-chroot /mnt pacman -S --noconfirm "$pkg" 2>/dev/null || {
-                warn "  Package $pkg not found in offline repo, skipping..."
-            }
+            if ! arch-chroot /mnt pacman -S --noconfirm "$pkg" 2>/dev/null; then
+                warn "  Failed to install $pkg"
+                failed_packages+=("$pkg")
+            fi
         done
+
+        # Report failures
+        if [[ ${#failed_packages[@]} -gt 0 ]]; then
+            echo
+            warn "WARNING: ${#failed_packages[@]} AUR packages failed to install:"
+            for pkg in "${failed_packages[@]}"; do
+                echo "  - $pkg"
+            done
+            echo
+            warn "After rebooting, install manually with: yay -S ${failed_packages[*]}"
+            sleep 3
+        fi
     else
         # Online mode: Build AUR packages with yay
         # Use user's home directory (guaranteed to exist after useradd -m)
@@ -1225,13 +1315,14 @@ main() {
     detect_offline_mode
 
     welcome
+    validate_offline_repo
+    check_network
     select_disk
     configure_user
     configure_extras
     partition_disk
     format_partitions
     mount_partitions
-    check_network
     install_base
     configure_system
     configure_swap
