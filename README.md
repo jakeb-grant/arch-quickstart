@@ -195,11 +195,39 @@ Walker uses Elephant as its backend indexer. The following providers are install
 | `files` | File search |
 | `archlinuxpkgs` | Search Arch packages |
 
+## ISO Variants
+
+Two ISO variants are built automatically:
+
+| Variant | Size | Internet Required | Use Case |
+|---------|------|-------------------|----------|
+| **Online** | ~1.2 GB | Yes (during install) | Fast build, always latest packages |
+| **Offline** | ~2.5 GB | No | Air-gapped installs, unreliable network |
+
+### Online ISO
+- Smaller download
+- Packages downloaded during installation
+- Always gets latest package versions
+- Requires stable internet connection
+
+### Offline ISO
+- All packages pre-built and embedded
+- No network required for base installation
+- Includes pre-loaded dotfiles (optional)
+- Network only needed for custom dotfiles from a different repo
+
 ## Building the ISO
 
 ### GitHub Actions (Automatic)
 
-Push to `main` or `claude/*` branches to trigger a build. Download the ISO from workflow artifacts.
+Push to `main` or `claude/*` branches to trigger a build. Both online and offline ISOs are built in parallel. Download from workflow artifacts.
+
+**Manual trigger with options:**
+1. Go to Actions → "Build Arch Linux ISO"
+2. Click "Run workflow"
+3. Optionally specify:
+   - Custom ISO name
+   - Dotfiles repo URL (for offline ISO)
 
 **Note:** For security, builds only run on pushes and same-repo PRs. Fork PRs are blocked.
 
@@ -209,10 +237,12 @@ Push to `main` or `claude/*` branches to trigger a build. Download the ISO from 
 # Install dependencies
 sudo pacman -S archiso
 
-# Build
+# Build (creates online variant)
 cd archiso
 sudo mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
 ```
+
+For offline builds with pre-loaded packages, use the GitHub Actions workflow.
 
 ## Configuration Files
 
@@ -227,6 +257,17 @@ DEFAULT_TIMEZONE="America/Denver"
 DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_KEYMAP="us"
 ```
+
+### `dotfiles.conf` - Offline Dotfiles
+
+```bash
+# Dotfiles repository to include in offline ISO builds
+DOTFILES_REPO=https://github.com/jakeb-grant/dotfiles
+```
+
+When set, the offline ISO will include pre-cloned dotfiles at `/opt/dotfiles`. The installer detects these and offers to apply them automatically—no network required.
+
+Leave empty to skip pre-loading dotfiles. Users can still enter a repo URL during installation if network is available.
 
 ### `archiso/airootfs/root/target-packages.x86_64` - Installed System Packages
 
@@ -247,16 +288,22 @@ archiso/
 ├── profiledef.sh              # ISO profile configuration
 ├── packages.x86_64            # Live ISO packages
 ├── pacman.conf                # Pacman config (multilib enabled)
+├── dotfiles.conf              # Dotfiles repo for offline ISO
 ├── airootfs/
 │   ├── etc/
 │   │   ├── pacman.conf        # Target system pacman config
-│   │   ├── pacman.d/mirrorlist
+│   │   ├── pacman.d/
+│   │   │   ├── mirrorlist
+│   │   │   └── offline-pacman.conf  # Offline mode pacman config
 │   │   └── skel/.config/hypr/
 │   │       └── hyprland.conf  # Default Hyprland config
+│   ├── opt/
+│   │   ├── offline-repo/      # Pre-built packages (offline ISO only)
+│   │   └── dotfiles/          # Pre-cloned dotfiles (offline ISO only)
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
-│   │   ├── target-packages.x86_64  # Target system packages (single source of truth)
-│   │   └── aur-packages.x86_64     # AUR packages installed via yay
+│   │   ├── target-packages.x86_64  # Target system packages
+│   │   └── aur-packages.x86_64     # AUR packages
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
 │       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
