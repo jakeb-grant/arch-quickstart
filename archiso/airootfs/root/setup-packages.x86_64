@@ -41,13 +41,10 @@ intel-compute-runtime
 # GPU - AMD
 # =============================================================================
 # Note: mesa and lib32-mesa are listed under Intel but shared with AMD
+# Note: VA-API and VDPAU drivers are now included in mesa (merged in 24.2.x)
 # Vulkan support
 vulkan-radeon
 lib32-vulkan-radeon
-# VA-API hardware video acceleration
-libva-mesa-driver
-lib32-libva-mesa-driver
-# Note: VDPAU drivers are now included in mesa (since 24.2.7-1)
 # Vulkan utilities
 vulkan-tools
 
