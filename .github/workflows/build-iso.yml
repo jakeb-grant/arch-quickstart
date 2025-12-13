@@ -54,6 +54,9 @@ jobs:
 
       - name: Validate package lists
         run: |
+          echo "Enabling multilib repository for lib32 package validation..."
+          echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+
           echo "Ensuring package databases are synchronized..."
           pacman -Sy
 
@@ -178,6 +181,9 @@ jobs:
 
       - name: Validate package lists
         run: |
+          echo "Enabling multilib repository for lib32 package validation..."
+          echo -e '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist' >> /etc/pacman.conf
+
           echo "Ensuring package databases are synchronized..."
           pacman -Sy
 
@@ -212,6 +218,21 @@ jobs:
               echo "✓ Valid package: $package"
             fi
           done < archiso/airootfs/root/target-packages.x86_64
+
+          # Validate setup script packages (GPU drivers, printer, firewall, etc.)
+          echo ""
+          echo "Validating packages in archiso/airootfs/root/setup-packages.x86_64 (setup scripts)..."
+          while IFS= read -r package; do
+            if [[ -z "$package" ]] || [[ "$package" =~ ^# ]]; then
+              continue
+            fi
+            if ! pacman -Si "$package" &>/dev/null; then
+              echo "❌ Invalid package: $package"
+              INVALID_PACKAGES="$INVALID_PACKAGES $package"
+            else
+              echo "✓ Valid package: $package"
+            fi
+          done < archiso/airootfs/root/setup-packages.x86_64
 
           if [[ -n "$INVALID_PACKAGES" ]]; then
             echo ""
