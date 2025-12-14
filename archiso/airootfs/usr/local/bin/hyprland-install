@@ -1243,14 +1243,14 @@ setup_dotfiles() {
         echo
 
         if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
-            # Copy dotfiles to target system (use /. to include hidden files like .chezmoi.toml.tmpl)
+            # Copy dotfiles to chezmoi's default source location (use /. to include hidden files)
             info "Copying dotfiles to installed system..."
-            mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi-source"
-            cp -r "$local_dotfiles"/. "/mnt/home/$USERNAME/.local/share/chezmoi-source/"
+            mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi"
+            cp -r "$local_dotfiles"/. "/mnt/home/$USERNAME/.local/share/chezmoi/"
             arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
 
             info "Applying dotfiles with chezmoi..."
-            arch-chroot /mnt sudo -u "$USERNAME" chezmoi init --source="/home/$USERNAME/.local/share/chezmoi-source" --apply || {
+            arch-chroot /mnt sudo -u "$USERNAME" chezmoi init --apply || {
                 warn "Dotfiles setup encountered an error."
                 warn "You can run 'chezmoi init --apply' after rebooting."
                 sleep 2
