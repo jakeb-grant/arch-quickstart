@@ -1,26 +1,11 @@
 # Hyprland Arch Linux ISO
 
-A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop environment.
+A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop environment. I use this to maintain clean Arch Linux installations, managed in accordance with my dotfiles.
 
 ## Related Repositories
 
 - **[jakeb-grant/dotfiles](https://github.com/jakeb-grant/dotfiles)** - Personal dotfiles managed with chezmoi. The installer can optionally apply these during installation.
-
-## What's Included
-
-**Desktop Environment:**
-- Hyprland (Wayland compositor)
-- SDDM (display manager)
-- Waybar (status bar)
-- Walker (application launcher with Elephant indexer)
-- Ghostty (terminal)
-
-**Applications:**
-- Firefox, Nautilus, Zed editor
-- PipeWire audio stack
-- iwd + impala (WiFi management)
-
-**Fonts:** JetBrains Mono Nerd, Noto fonts
+- See the section of the README on configuration files for additional detail. Your dotefiles repo must be managed with chezmoi and you must make sure that all Arch packages you want on your base system are contained in either `archiso/airootfs/root/target-packages.x86_64`(for packages contained in the standard repos) or `archiso/airootfs/root/aur-packages.x86_64` (for AUR packages).
 
 ## Installation Flow
 
@@ -169,41 +154,6 @@ printer-setup     # CUPS + drivers
 firewall-setup    # UFW with interactive rules
 dotfiles-setup    # Clone your dotfiles repo
 ```
-
-## Default Keybinds (Hyprland)
-
-| Keybind | Action |
-|---------|--------|
-| `SUPER + Return` | Open terminal (Ghostty) |
-| `SUPER + D` | Application launcher (Walker) |
-| `SUPER + E` | File manager (Nautilus) |
-| `SUPER + Q` | Close window |
-| `SUPER + F` | Toggle fullscreen |
-| `SUPER + V` | Toggle floating |
-| `SUPER + M` | Exit Hyprland |
-| `SUPER + 1-9` | Switch workspace |
-| `SUPER + SHIFT + 1-9` | Move window to workspace |
-| `SUPER + H/J/K/L` | Move focus (vim keys) |
-| `SUPER + Arrow Keys` | Move focus |
-| `SUPER + Mouse Drag` | Move/resize window |
-| `Print` | Screenshot region to clipboard |
-| `SHIFT + Print` | Screenshot full screen |
-| `XF86Audio*` | Volume controls |
-| `XF86MonBrightness*` | Brightness controls |
-
-## Walker (Application Launcher)
-
-Walker uses Elephant as its backend indexer. The following providers are installed:
-
-| Provider | Function |
-|----------|----------|
-| `desktopapplications` | Launch installed applications |
-| `windows` | Switch between open windows |
-| `clipboard` | Clipboard history |
-| `calc` | Calculator |
-| `runner` | Run shell commands |
-| `files` | File search |
-| `archlinuxpkgs` | Search Arch packages |
 
 ## ISO Variants
 
