@@ -7,20 +7,9 @@
 # Yay AUR helper (always built first)
 yay-bin
 
-# Walker application launcher and Elephant indexer
+# Walker application launcher and Elephant indexer 
 walker-bin
-elephant
-elephant-desktopapplications
-elephant-windows
-elephant-clipboard
-elephant-calc
-elephant-runner
-elephant-files
-elephant-archlinuxpkgs
-elephant-menus
+elephant-all-bin
 
 # Awww wallpaper system
 awww-git
-
-# Zen browser
-zen-browser-bin
