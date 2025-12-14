@@ -1243,10 +1243,10 @@ setup_dotfiles() {
         echo
 
         if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
-            # Copy dotfiles to target system
+            # Copy dotfiles to target system (use /. to include hidden files like .chezmoi.toml.tmpl)
             info "Copying dotfiles to installed system..."
             mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi-source"
-            cp -r "$local_dotfiles"/* "/mnt/home/$USERNAME/.local/share/chezmoi-source/"
+            cp -r "$local_dotfiles"/. "/mnt/home/$USERNAME/.local/share/chezmoi-source/"
             arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
 
             info "Applying dotfiles with chezmoi..."
