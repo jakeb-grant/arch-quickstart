@@ -1164,7 +1164,7 @@ install_aur_packages() {
         # Install each AUR package directly with pacman (they're in the offline repo)
         for pkg in "${aur_packages[@]}"; do
             info "  Installing $pkg..."
-            if ! arch-chroot /mnt pacman -S --noconfirm "$pkg" 2>/dev/null; then
+            if ! arch-chroot /mnt pacman -S --noconfirm "$pkg"; then
                 warn "  Failed to install $pkg"
                 failed_packages+=("$pkg")
             fi
