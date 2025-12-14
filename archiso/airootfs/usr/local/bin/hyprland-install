@@ -287,14 +287,31 @@ connect_wifi() {
     sleep 3
 
     # Get list of WiFi networks
+    # iwctl output format has fixed-width columns:
+    #   [marker/spaces ~6 chars][SSID 32 chars][Security ~18 chars][Signal]
+    # We strip ANSI codes, extract the SSID column (chars 7-38), and trim whitespace
     local networks
-    networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | tail -n +5 | awk '{print $1}' | grep -v '^$' | sort -u)
+    networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | \
+        tail -n +5 | \
+        sed 's/\x1b\[[0-9;]*m//g' | \
+        awk 'length >= 38 && !/^[[:space:]]*-+[[:space:]]*$/ {
+            ssid = substr($0, 7, 32)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", ssid)
+            if (ssid != "") print ssid
+        }' | sort -u)
 
     if [[ -z "$networks" ]]; then
         warn "No WiFi networks found. Rescanning..."
         iwctl station "$wifi_device" scan 2>/dev/null || true
         sleep 3
-        networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | tail -n +5 | awk '{print $1}' | grep -v '^$' | sort -u)
+        networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | \
+            tail -n +5 | \
+            sed 's/\x1b\[[0-9;]*m//g' | \
+            awk 'length >= 38 && !/^[[:space:]]*-+[[:space:]]*$/ {
+                ssid = substr($0, 7, 32)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", ssid)
+                if (ssid != "") print ssid
+            }' | sort -u)
     fi
 
     if [[ -z "$networks" ]]; then
