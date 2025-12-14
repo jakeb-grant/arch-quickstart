@@ -9,7 +9,16 @@ yay-bin
 
 # Walker application launcher and Elephant indexer 
 walker-bin
-elephant-all-bin
+elephant-bin
+elephant-files-bin
+elephant-menus-bin
+elephant-windows-bin
+elephant-1password-bin
+elephant-clipboard-bin
+elephant-calc-bin
+elephant-desktopapplications-bin
+elephant-archlinuxpkgs-bin
+elephant-runner-bin
 
 # Awww wallpaper system
 awww-git
