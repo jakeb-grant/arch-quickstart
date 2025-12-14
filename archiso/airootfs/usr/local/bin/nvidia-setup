@@ -55,6 +55,12 @@ target_path() {
     echo "${CHROOT_TARGET}$1"
 }
 
+is_offline_mode() {
+    # Check if running in offline mode (local repo, no internet mirrors)
+    local conf="$(target_path /etc/pacman.conf)"
+    grep -q "Server = file:///opt/offline-repo" "$conf" 2>/dev/null
+}
+
 # Get the user's home directory path
 get_user_home() {
     if [[ -n "$CHROOT_USER" ]]; then
@@ -257,26 +263,32 @@ fi
 # ==============================================================================
 header "Installing Packages"
 
-# Check if multilib is enabled (required for lib32 packages)
-PACMAN_CONF="$(target_path /etc/pacman.conf)"
-if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
-    warn "Multilib repository is not enabled!"
-    info "Enabling multilib repository for 32-bit support..."
-
-    # Enable multilib by uncommenting the section
-    sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$PACMAN_CONF"
-
-    # Verify it was enabled
+# Check if we're in offline mode (packages pre-installed in local repo)
+if is_offline_mode; then
+    info "Offline mode detected - using local package repository"
+    info "Skipping database sync (packages already available locally)"
+else
+    # Online mode: ensure multilib is enabled and sync databases
+    PACMAN_CONF="$(target_path /etc/pacman.conf)"
     if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
-        warn "Could not auto-enable multilib. Adding it manually..."
-        echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> "$PACMAN_CONF"
+        warn "Multilib repository is not enabled!"
+        info "Enabling multilib repository for 32-bit support..."
+
+        # Enable multilib by uncommenting the section
+        sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$PACMAN_CONF"
+
+        # Verify it was enabled
+        if ! grep -q "^\[multilib\]" "$PACMAN_CONF"; then
+            warn "Could not auto-enable multilib. Adding it manually..."
+            echo -e "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist" >> "$PACMAN_CONF"
+        fi
+
+        info "Multilib repository enabled"
     fi
 
-    info "Multilib repository enabled"
+    info "Updating package database..."
+    run_cmd pacman -Syu --noconfirm
 fi
-
-info "Updating package database..."
-run_cmd pacman -Syu --noconfirm
 
 PACKAGES_TO_INSTALL=(
     "${KERNEL_HEADERS}"
