@@ -1,13 +1,14 @@
 # AUR packages installed on the target system
 # One package per line, comments starting with # are ignored
+#
+# Note: yay-bin is built first manually, then yay installs the rest.
+# yay handles dependency resolution automatically, so order doesn't matter.
 
-# Yay AUR helper (installed first, required for other AUR packages)
+# Yay AUR helper (always built first)
 yay-bin
 
-# Walker application launcher
+# Walker application launcher and Elephant indexer
 walker-bin
-
-# Elephant indexer and providers for Walker
 elephant
 elephant-desktopapplications
 elephant-windows

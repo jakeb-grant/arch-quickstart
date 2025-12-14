@@ -21,6 +21,10 @@ export GUM_SPIN_SPINNER_FOREGROUND="#89b4fa"
 PACKAGES_FILE="/root/target-packages.x86_64"
 CONFIG_FILE="/root/install.conf"
 
+# Offline installation mode
+OFFLINE_REPO="/opt/offline-repo"
+OFFLINE_MODE=0
+
 # Load configuration defaults
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -70,19 +74,180 @@ header() {
 }
 
 # -----------------------------------------------------------------------------
+# Offline Mode Detection
+# -----------------------------------------------------------------------------
+
+detect_offline_mode() {
+    if [[ -d "$OFFLINE_REPO" ]] && [[ -f "$OFFLINE_REPO/offline.db.tar.zst" ]]; then
+        OFFLINE_MODE=1
+        return 0
+    fi
+    OFFLINE_MODE=0
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Offline Repository Validation
+# -----------------------------------------------------------------------------
+
+validate_offline_repo() {
+    # Only validate in offline mode
+    if [[ "$OFFLINE_MODE" -ne 1 ]]; then
+        return 0
+    fi
+
+    header
+    info "Validating offline repository..."
+    echo
+
+    local missing_packages=()
+    local available_packages
+    local db_file="$OFFLINE_REPO/offline.db.tar.zst"
+
+    # Check if database exists
+    if [[ ! -f "$db_file" ]]; then
+        warn "Could not find offline repository database"
+        warn "Skipping validation"
+        return 0
+    fi
+
+    # Extract package names from the database by reading %NAME% fields from desc files
+    # This is more reliable than parsing directory names which fail for packages with hyphens
+    available_packages=$(tar --wildcards -xf "$db_file" -O '*/desc' 2>/dev/null | awk '/^%NAME%$/{getline; print}')
+
+    if [[ -z "$available_packages" ]]; then
+        warn "Could not read offline repository database"
+        warn "Skipping validation"
+        return 0
+    fi
+
+    # Check target packages
+    if [[ -f "$PACKAGES_FILE" ]]; then
+        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pkg// }" ]] && continue
+            if ! echo "$available_packages" | grep -qx "$pkg"; then
+                missing_packages+=("$pkg")
+            fi
+        done < "$PACKAGES_FILE"
+    fi
+
+    # Check AUR packages
+    local aur_packages_file="/root/aur-packages.x86_64"
+    if [[ -f "$aur_packages_file" ]]; then
+        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pkg// }" ]] && continue
+            if ! echo "$available_packages" | grep -qx "$pkg"; then
+                missing_packages+=("$pkg")
+            fi
+        done < "$aur_packages_file"
+    fi
+
+    # Check setup script packages (GPU drivers, printer, firewall, etc.)
+    local setup_packages_file="/root/setup-packages.x86_64"
+    if [[ -f "$setup_packages_file" ]]; then
+        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pkg// }" ]] && continue
+            if ! echo "$available_packages" | grep -qx "$pkg"; then
+                missing_packages+=("$pkg")
+            fi
+        done < "$setup_packages_file"
+    fi
+
+    # Report results
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        warn "WARNING: ${#missing_packages[@]} packages missing from offline repository:"
+        echo
+        for pkg in "${missing_packages[@]}"; do
+            echo "  - $pkg"
+        done
+        echo
+        warn "These packages will fail to install in offline mode."
+        echo
+        if ! gum confirm --default=false "Continue anyway?"; then
+            die "Installation cancelled - offline repository incomplete"
+        fi
+    else
+        success "All required packages found in offline repository!"
+        sleep 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Network Check
 # -----------------------------------------------------------------------------
 
+# Test network connectivity using HTTP (more reliable than ping/ICMP)
+test_network() {
+    # Try curl first (HTTP), fall back to ping (ICMP)
+    if curl -s --connect-timeout 5 --max-time 10 https://archlinux.org >/dev/null 2>&1; then
+        return 0
+    elif ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Try to bring up ethernet via DHCP
+bring_up_ethernet() {
+    local iface
+    # Find ethernet interfaces (en* or eth*)
+    for iface in /sys/class/net/en* /sys/class/net/eth*; do
+        [[ -e "$iface" ]] || continue
+        iface=$(basename "$iface")
+        # Skip if already has an IP
+        if ip addr show "$iface" | grep -q 'inet '; then
+            continue
+        fi
+        info "  Requesting IP for $iface..."
+        # Try dhcpcd (timeout after 10 seconds)
+        timeout 10 dhcpcd -w "$iface" 2>/dev/null && return 0
+    done
+    return 1
+}
+
 check_network() {
     header
+
+    # In offline mode, network is optional (only needed for dotfiles)
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        success "Offline mode: All packages are pre-installed on this ISO"
+        echo
+        info "Checking network connectivity (optional for dotfiles)..."
+        echo
+
+        if test_network; then
+            success "Network connected! (dotfiles setup will be available)"
+        else
+            warn "No network connection - dotfiles setup will be skipped"
+        fi
+        sleep 2
+        return 0
+    fi
+
+    # Online mode - network is required
     info "Checking network connectivity..."
     echo
 
     # Test internet connectivity
-    if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+    if test_network; then
         success "Network connected!"
         sleep 1
         return 0
+    fi
+
+    # No connection - try to bring up ethernet via DHCP
+    info "No connection detected, attempting to configure ethernet..."
+    echo
+    if bring_up_ethernet; then
+        sleep 2
+        if test_network; then
+            success "Network connected!"
+            sleep 1
+            return 0
+        fi
     fi
 
     warn "No internet connection detected."
@@ -96,7 +261,7 @@ check_network() {
             die "Internet connection required for installation."
         fi
     else
-        die "No network connection. Please connect via ethernet and restart."
+        die "No network connection. Please check your network settings and restart."
     fi
 }
 
@@ -151,7 +316,7 @@ connect_wifi() {
     info "Connecting to '$ssid'..."
     if iwctl --passphrase "$wifi_password" station "$wifi_device" connect "$ssid" 2>&1; then
         sleep 2
-        if ping -c 1 -W 3 archlinux.org &>/dev/null; then
+        if test_network; then
             success "Connected to WiFi!"
             sleep 1
             return 0
@@ -172,6 +337,17 @@ connect_wifi() {
 
 welcome() {
     header
+
+    # Show installation mode
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        gum style \
+            --foreground="#a6e3a1" \
+            --bold \
+            --padding "0 2" \
+            "OFFLINE MODE - All packages pre-installed on ISO"
+        echo
+    fi
+
     gum style \
         --padding "1 2" \
         --margin "0 2" \
@@ -619,10 +795,6 @@ install_base() {
     pacman-key --init
     pacman-key --populate archlinux
 
-    # Sync package databases
-    info "Syncing package databases..."
-    pacman -Sy
-
     # Pre-configure locale in target before package install
     # Some packages check locale during installation
     info "Pre-configuring locale..."
@@ -641,11 +813,35 @@ install_base() {
     fi
 
     info "Installing ${#packages[@]} packages..."
-    info "This will take several minutes..."
     echo
 
-    # Install packages with pacstrap
-    pacstrap -K /mnt "${packages[@]}"
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        # Offline installation using local repository
+        info "Using offline repository (no download required)..."
+        echo
+
+        # Copy offline repository to target
+        mkdir -p /mnt/opt/offline-repo
+        cp -r "$OFFLINE_REPO"/* /mnt/opt/offline-repo/
+
+        # Create pacman.conf for target that uses offline repo
+        mkdir -p /mnt/etc/pacman.d
+        cp /etc/pacman.d/offline-pacman.conf /mnt/etc/pacman.conf
+
+        # Install packages with pacstrap using offline config
+        pacstrap -C /etc/pacman.d/offline-pacman.conf -K /mnt "${packages[@]}"
+    else
+        # Online installation (original behavior)
+        info "This will take several minutes (downloading packages)..."
+        echo
+
+        # Sync package databases
+        info "Syncing package databases..."
+        pacman -Sy
+
+        # Install packages with pacstrap
+        pacstrap -K /mnt "${packages[@]}"
+    fi
 
     # Verify installation succeeded
     if [[ ! -x /mnt/usr/bin/ln ]]; then
@@ -671,8 +867,14 @@ configure_system() {
 
     # Copy pacman.conf with multilib enabled
     info "  Copying pacman.conf (multilib enabled)..."
-    cp /etc/pacman.conf /mnt/etc/pacman.conf
-    cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        # In offline mode, keep the offline pacman.conf (set during install_base)
+        # Just ensure mirrorlist is copied for future online updates
+        cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+    else
+        cp /etc/pacman.conf /mnt/etc/pacman.conf
+        cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+    fi
 
     # Timezone
     info "  Setting timezone..."
@@ -951,11 +1153,41 @@ install_aur_packages() {
     info "Packages to install: ${aur_packages[*]}"
     echo
 
-    # Use user's home directory (guaranteed to exist after useradd -m)
-    local script_path="/mnt/home/$USERNAME/install-aur.sh"
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        # Offline mode: AUR packages are already in the offline repository
+        info "Installing pre-built AUR packages from offline repository..."
+        echo
 
-    # Create a script to run as the user for AUR installation
-    cat > "$script_path" << AURSCRIPT
+        # Track failed packages
+        local failed_packages=()
+
+        # Install each AUR package directly with pacman (they're in the offline repo)
+        for pkg in "${aur_packages[@]}"; do
+            info "  Installing $pkg..."
+            if ! arch-chroot /mnt pacman -S --noconfirm "$pkg"; then
+                warn "  Failed to install $pkg"
+                failed_packages+=("$pkg")
+            fi
+        done
+
+        # Report failures
+        if [[ ${#failed_packages[@]} -gt 0 ]]; then
+            echo
+            warn "WARNING: ${#failed_packages[@]} AUR packages failed to install:"
+            for pkg in "${failed_packages[@]}"; do
+                echo "  - $pkg"
+            done
+            echo
+            warn "After rebooting, install manually with: yay -S ${failed_packages[*]}"
+            sleep 3
+        fi
+    else
+        # Online mode: Build AUR packages with yay
+        # Use user's home directory (guaranteed to exist after useradd -m)
+        local script_path="/mnt/home/$USERNAME/install-aur.sh"
+
+        # Create a script to run as the user for AUR installation
+        cat > "$script_path" << AURSCRIPT
 #!/bin/bash
 set -e
 
@@ -974,19 +1206,20 @@ fi
 yay -S --noconfirm ${aur_packages[*]}
 AURSCRIPT
 
-    chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
-    chmod +x "$script_path"
+        chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
+        chmod +x "$script_path"
 
-    # Verify script exists
-    if [[ ! -f "$script_path" ]]; then
-        die "Failed to create AUR install script!"
+        # Verify script exists
+        if [[ ! -f "$script_path" ]]; then
+            die "Failed to create AUR install script!"
+        fi
+
+        info "Building and installing yay (AUR helper)..."
+        arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh"
+
+        # Cleanup
+        rm -f "$script_path"
     fi
-
-    info "Building and installing yay (AUR helper)..."
-    arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh"
-
-    # Cleanup
-    rm -f "$script_path"
 
     success "AUR packages installed!"
     sleep 1
@@ -1001,9 +1234,49 @@ setup_dotfiles() {
     info "Dotfiles Setup"
     echo
 
-    if ! gum confirm --default=false "Would you like to set up dotfiles using chezmoi?"; then
+    local dotfiles_source=""
+    local local_dotfiles="/opt/dotfiles"
+
+    # Check for pre-loaded dotfiles on the ISO (offline mode)
+    if [[ -d "$local_dotfiles" ]] && [[ -d "$local_dotfiles/.git" ]]; then
+        success "Found pre-loaded dotfiles on ISO!"
+        echo
+
+        if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
+            # Copy dotfiles to chezmoi's default source location (use /. to include hidden files)
+            info "Copying dotfiles to installed system..."
+            mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi"
+            cp -r "$local_dotfiles"/. "/mnt/home/$USERNAME/.local/share/chezmoi/"
+            arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
+
+            info "Applying dotfiles with chezmoi..."
+            arch-chroot /mnt sudo -u "$USERNAME" chezmoi init --apply || {
+                warn "Dotfiles setup encountered an error."
+                warn "You can run 'chezmoi init --apply' after rebooting."
+                sleep 2
+                return
+            }
+
+            success "Dotfiles applied successfully!"
+            sleep 1
+            return
+        else
+            info "Skipping pre-loaded dotfiles."
+        fi
+    fi
+
+    # No local dotfiles or user declined - prompt for remote repo
+    if ! gum confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
         info "Skipping dotfiles setup."
         sleep 1
+        return
+    fi
+
+    # Check if we have network connectivity
+    if ! test_network; then
+        warn "No network connection available."
+        warn "You can run 'dotfiles-setup <repo>' after rebooting."
+        sleep 2
         return
     fi
 
@@ -1042,6 +1315,48 @@ setup_dotfiles() {
 
 finish() {
     header
+
+    # Restore standard pacman.conf for online updates after installation
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        info "Configuring system for online updates..."
+
+        # Create standard pacman.conf (without offline repo)
+        cat > /mnt/etc/pacman.conf << 'PACMANCONF'
+#
+# /etc/pacman.conf
+#
+# See the pacman.conf(5) manpage for option and repository directives
+
+[options]
+HoldPkg     = pacman glibc
+Architecture = auto
+
+# Misc options
+CheckSpace
+ParallelDownloads = 5
+Color
+VerbosePkgLists
+
+SigLevel    = Required DatabaseOptional
+LocalFileSigLevel = Optional
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+PACMANCONF
+
+        # Optionally remove offline repo to save disk space
+        # Uncomment the following line if you want to remove it:
+        # rm -rf /mnt/opt/offline-repo
+
+        success "System configured for online updates"
+        echo
+    fi
 
     gum style \
         --border rounded \
@@ -1092,14 +1407,18 @@ main() {
         die "gum is not installed!"
     fi
 
+    # Detect if offline repository is available
+    detect_offline_mode
+
     welcome
+    validate_offline_repo
+    check_network
     select_disk
     configure_user
     configure_extras
     partition_disk
     format_partitions
     mount_partitions
-    check_network
     install_base
     configure_system
     configure_swap

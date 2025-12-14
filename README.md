@@ -151,6 +151,16 @@ prime-run glxinfo | grep "OpenGL renderer"
 - Adds Hyprland environment variables
 - Auto-enables multilib if needed
 
+##### AMD ROCm (GPU Compute)
+
+ROCm is **not installed by default** due to its large size (~500MB+). If you need GPU compute capabilities (OpenCL, machine learning with PyTorch/TensorFlow, Blender GPU rendering), run `amd-setup` manually after installation:
+
+```bash
+amd-setup  # Will prompt to install ROCm packages
+```
+
+This requires network access as ROCm packages are not included in the offline ISO.
+
 #### System Features
 
 ```bash
@@ -195,11 +205,41 @@ Walker uses Elephant as its backend indexer. The following providers are install
 | `files` | File search |
 | `archlinuxpkgs` | Search Arch packages |
 
+## ISO Variants
+
+Two ISO variants are built automatically:
+
+| Variant | Size | Internet Required | Use Case |
+|---------|------|-------------------|----------|
+| **Online** | ~1.2 GB | Yes (during install) | Fast build, always latest packages |
+| **Offline** | ~5-6 GB | No | Air-gapped installs, unreliable network |
+
+### Online ISO
+- Smaller download
+- Packages downloaded during installation
+- Always gets latest package versions
+- Requires stable internet connection
+
+### Offline ISO
+- All packages pre-built and embedded
+- No network required for full installation (including GPU drivers)
+- Includes all GPU drivers (NVIDIA, Intel, AMD) - correct ones installed based on detected hardware
+- Includes printer drivers, firewall, and Bluetooth packages
+- Includes pre-loaded dotfiles (optional)
+- Network only needed for: custom dotfiles from a different repo, or AMD ROCm compute packages
+
 ## Building the ISO
 
 ### GitHub Actions (Automatic)
 
-Push to `main` or `claude/*` branches to trigger a build. Download the ISO from workflow artifacts.
+Push to `main` or `claude/*` branches to trigger a build. Both online and offline ISOs are built in parallel. Download from workflow artifacts.
+
+**Manual trigger with options:**
+1. Go to Actions → "Build Arch Linux ISO"
+2. Click "Run workflow"
+3. Optionally specify:
+   - Custom ISO name
+   - Dotfiles repo URL (for offline ISO)
 
 **Note:** For security, builds only run on pushes and same-repo PRs. Fork PRs are blocked.
 
@@ -209,10 +249,12 @@ Push to `main` or `claude/*` branches to trigger a build. Download the ISO from 
 # Install dependencies
 sudo pacman -S archiso
 
-# Build
+# Build (creates online variant)
 cd archiso
 sudo mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
 ```
+
+For offline builds with pre-loaded packages, use the GitHub Actions workflow.
 
 ## Configuration Files
 
@@ -228,6 +270,17 @@ DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_KEYMAP="us"
 ```
 
+### `dotfiles.conf` - Offline Dotfiles
+
+```bash
+# Dotfiles repository to include in offline ISO builds
+DOTFILES_REPO=https://github.com/jakeb-grant/dotfiles
+```
+
+When set, the offline ISO will include pre-cloned dotfiles at `/opt/dotfiles`. The installer detects these and offers to apply them automatically—no network required.
+
+Leave empty to skip pre-loading dotfiles. Users can still enter a repo URL during installation if network is available.
+
 ### `archiso/airootfs/root/target-packages.x86_64` - Installed System Packages
 
 Packages installed on the target system (the full Hyprland desktop). This is the **single source of truth** for target packages—the installer reads from this location.
@@ -235,6 +288,20 @@ Packages installed on the target system (the full Hyprland desktop). This is the
 ### `archiso/airootfs/root/aur-packages.x86_64` - AUR Packages
 
 AUR packages installed via yay on the target system. Comments (lines starting with `#`) and blank lines are ignored.
+
+### `archiso/airootfs/root/setup-packages.x86_64` - Setup Script Packages
+
+Packages included in the offline repository but **not auto-installed**. These are installed on-demand by the setup scripts:
+
+| Category | Packages | Used By |
+|----------|----------|---------|
+| NVIDIA | `nvidia-dkms`, `nvidia-open-dkms`, `nvidia-utils`, etc. | `nvidia-setup` |
+| Intel | `mesa`, `vulkan-intel`, `intel-media-driver`, etc. | `intel-setup` |
+| AMD | `vulkan-radeon`, `libva-mesa-driver`, etc. | `amd-setup` |
+| Firewall | `ufw` | `firewall-setup` |
+| Printing | `cups`, `ghostscript`, `gutenprint`, etc. | `printer-setup` |
+
+This architecture allows the offline ISO to support any hardware configuration without installing unnecessary drivers. The correct packages are installed based on detected hardware during the setup phase.
 
 ### `archiso/packages.x86_64` - Live ISO Packages
 
@@ -247,16 +314,23 @@ archiso/
 ├── profiledef.sh              # ISO profile configuration
 ├── packages.x86_64            # Live ISO packages
 ├── pacman.conf                # Pacman config (multilib enabled)
+├── dotfiles.conf              # Dotfiles repo for offline ISO
 ├── airootfs/
 │   ├── etc/
 │   │   ├── pacman.conf        # Target system pacman config
-│   │   ├── pacman.d/mirrorlist
+│   │   ├── pacman.d/
+│   │   │   ├── mirrorlist
+│   │   │   └── offline-pacman.conf  # Offline mode pacman config
 │   │   └── skel/.config/hypr/
 │   │       └── hyprland.conf  # Default Hyprland config
+│   ├── opt/
+│   │   ├── offline-repo/      # Pre-built packages (offline ISO only)
+│   │   └── dotfiles/          # Pre-cloned dotfiles (offline ISO only)
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
-│   │   ├── target-packages.x86_64  # Target system packages (single source of truth)
-│   │   └── aur-packages.x86_64     # AUR packages installed via yay
+│   │   ├── target-packages.x86_64  # Target system packages (always installed)
+│   │   ├── aur-packages.x86_64     # AUR packages (always installed)
+│   │   └── setup-packages.x86_64   # Setup script packages (on-demand)
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
 │       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
