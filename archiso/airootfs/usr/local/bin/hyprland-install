@@ -1371,6 +1371,9 @@ PACMANCONF
         # Uncomment the following line if you want to remove it:
         # rm -rf /mnt/opt/offline-repo
 
+        # Resync package databases (they don't exist yet)
+        sudo pacman -Sy
+
         success "System configured for online updates"
         echo
     fi
