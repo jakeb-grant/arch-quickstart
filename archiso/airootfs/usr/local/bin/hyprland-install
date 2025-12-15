@@ -370,12 +370,7 @@ welcome() {
         --margin "0 2" \
         "Welcome to the Hyprland Arch Linux installer!" \
         "" \
-        "This will install a clean Arch Linux system with:" \
-        "  • Hyprland compositor" \
-        "  • SDDM display manager" \
-        "  • Waybar, Walker, Ghostty" \
-        "  • Firefox, Nautilus" \
-        "  • Pipewire audio"
+        "This will install a clean Arch Linux system with Hyprland."
 
     echo
     if ! gum confirm "Ready to proceed?"; then
