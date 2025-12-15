@@ -1371,8 +1371,13 @@ PACMANCONF
         # Uncomment the following line if you want to remove it:
         # rm -rf /mnt/opt/offline-repo
 
-        # Resync package databases (they don't exist yet)
-        sudo pacman -Sy
+        # Sync package databases in the installed system (if network available)
+        if test_network; then
+            info "Syncing package databases..."
+            arch-chroot /mnt pacman -Sy --noconfirm
+        else
+            info "No network - package databases will sync on first online update"
+        fi
 
         success "System configured for online updates"
         echo
