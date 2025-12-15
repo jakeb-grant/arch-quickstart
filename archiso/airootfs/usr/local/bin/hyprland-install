@@ -436,13 +436,9 @@ configure_user() {
     gum style --foreground="#cba6f7" "Configure your system:"
     echo
 
-    # Hostname - select from predefined options
-    info "Select machine type:"
-    if [[ ${#DEFAULT_HOSTNAME_OPTIONS[@]} -gt 0 ]]; then
-        HOSTNAME=$(printf '%s\n' "${DEFAULT_HOSTNAME_OPTIONS[@]}" | gum choose)
-    else
-        HOSTNAME=$(gum input --placeholder "archlinux" --value "archlinux")
-    fi
+    # Hostname
+    info "Enter hostname:"
+    HOSTNAME=$(gum input --placeholder "archlinux" --value "${DEFAULT_HOSTNAME:-archlinux}")
     HOSTNAME=${HOSTNAME:-archlinux}
 
     echo
