@@ -14,9 +14,6 @@ linux-headers
 grub
 efibootmgr
 
-# Bootscreen customization
-plymouth
-
 # Filesystem
 btrfs-progs
 dosfstools
