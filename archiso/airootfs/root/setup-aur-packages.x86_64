@@ -1,0 +1,16 @@
+# Setup script AUR packages
+# These packages are built during ISO creation and included in the offline repo,
+# but are NOT automatically installed. They are installed on-demand by setup
+# scripts (nvidia-setup, etc.) based on hardware detection.
+#
+# This separation prevents conflicts (e.g., nvidia-580xx vs nvidia-open).
+
+# =============================================================================
+# GPU - NVIDIA Legacy (Pascal GTX 10xx, Maxwell GTX 9xx, and older)
+# =============================================================================
+# Required for GPUs no longer supported by driver 590+
+# These GPUs need the legacy proprietary driver branch
+nvidia-580xx-dkms
+nvidia-580xx-utils
+nvidia-580xx-settings
+lib32-nvidia-580xx-utils

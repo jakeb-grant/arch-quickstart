@@ -3,11 +3,12 @@
 # They are installed on-demand by the setup scripts (nvidia-setup, printer-setup, etc.)
 
 # =============================================================================
-# GPU - NVIDIA
+# GPU - NVIDIA (Driver 590+)
 # =============================================================================
-# Proprietary driver (Pascal and older)
-nvidia-dkms
-# Open kernel modules (Turing and newer - required for Blackwell)
+# Open kernel modules (Turing GTX 16xx, RTX 20xx and newer)
+# Note: Driver 590+ only supports Turing and newer GPUs
+# Legacy GPUs (Pascal GTX 10xx, Maxwell GTX 9xx, older) require nvidia-580xx
+# from AUR - see setup-aur-packages.x86_64
 nvidia-open-dkms
 # Userspace utilities
 nvidia-utils
