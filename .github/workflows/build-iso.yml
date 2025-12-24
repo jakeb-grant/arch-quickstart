@@ -241,6 +241,24 @@ jobs:
               cp -n /var/cache/pacman/pkg/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
             fi
 
+            # Build setup-script AUR packages (not auto-installed, used by nvidia-setup etc.)
+            # These are kept separate to prevent conflicts (e.g., nvidia-580xx vs nvidia-open)
+            SETUP_AUR_FILE="/workspace/archiso/airootfs/root/setup-aur-packages.x86_64"
+            if [[ -f "$SETUP_AUR_FILE" ]]; then
+              mapfile -t SETUP_AUR_PACKAGES < <(grep -v "^#" "$SETUP_AUR_FILE" | grep -v "^$")
+              if [[ ${#SETUP_AUR_PACKAGES[@]} -gt 0 ]]; then
+                echo ""
+                echo "Building setup-script AUR packages..."
+                echo "::group::Building setup AUR packages with yay"
+                su -s /bin/bash builder -c "yay -S --noconfirm --needed ${SETUP_AUR_PACKAGES[*]}"
+                echo "::endgroup::"
+
+                # Copy built packages to offline repo
+                cp /home/builder/.cache/yay/*/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
+                cp -n /var/cache/pacman/pkg/*.pkg.tar.zst /tmp/offline-repo/ 2>/dev/null || true
+              fi
+            fi
+
             rm -rf /home/builder/.cache/yay /tmp/aur-build
             pacman -Scc --noconfirm 2>/dev/null || true
 
@@ -270,6 +288,14 @@ jobs:
               [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
               echo "$REPO_PACKAGES" | grep -qx "$pkg" || MISSING="$MISSING $pkg"
             done < /workspace/archiso/airootfs/root/setup-packages.x86_64
+
+            # Validate setup-aur-packages (legacy NVIDIA drivers, etc.)
+            if [[ -f /workspace/archiso/airootfs/root/setup-aur-packages.x86_64 ]]; then
+              while IFS= read -r pkg || [[ -n "$pkg" ]]; do
+                [[ -z "$pkg" ]] || [[ "$pkg" =~ ^# ]] && continue
+                echo "$REPO_PACKAGES" | grep -qx "$pkg" || MISSING="$MISSING $pkg"
+              done < /workspace/archiso/airootfs/root/setup-aur-packages.x86_64
+            fi
 
             if [[ -n "$MISSING" ]]; then
               echo "ERROR: Missing packages:$MISSING"

@@ -61,6 +61,65 @@ is_offline_mode() {
     grep -q "Server = file:///opt/offline-repo" "$conf" 2>/dev/null
 }
 
+# Check if an AUR helper is available
+get_aur_helper() {
+    if [[ -n "$CHROOT_TARGET" ]]; then
+        if arch-chroot "$CHROOT_TARGET" which paru &>/dev/null 2>&1; then
+            echo "paru"
+        elif arch-chroot "$CHROOT_TARGET" which yay &>/dev/null 2>&1; then
+            echo "yay"
+        fi
+    else
+        if command -v paru &>/dev/null; then
+            echo "paru"
+        elif command -v yay &>/dev/null; then
+            echo "yay"
+        fi
+    fi
+}
+
+# Install AUR packages (handles offline vs online mode)
+# Usage: aur_install <package1> <package2> ...
+aur_install() {
+    local packages=("$@")
+
+    if is_offline_mode; then
+        # Offline mode: packages are pre-built in offline repo, use pacman
+        info "Installing from offline repository..."
+        pkg_install "${packages[@]}"
+    else
+        # Online mode: need AUR helper
+        local aur_helper
+        aur_helper=$(get_aur_helper)
+
+        if [[ -z "$aur_helper" ]]; then
+            echo ""
+            error "No AUR helper found (paru or yay required for legacy NVIDIA drivers)"
+        fi
+
+        info "Installing via $aur_helper..."
+        if [[ -n "$CHROOT_TARGET" ]]; then
+            # In chroot: need to run as non-root user
+            if [[ -z "$CHROOT_USER" ]]; then
+                error "CHROOT_USER not set - cannot install AUR packages in chroot"
+            fi
+            arch-chroot "$CHROOT_TARGET" sudo -u "$CHROOT_USER" $aur_helper -S --noconfirm --needed "${packages[@]}"
+        else
+            # Normal system: check if running as root
+            if [[ $EUID -eq 0 ]]; then
+                # Running as root (via sudo), get the original user
+                if [[ -n "$SUDO_USER" ]]; then
+                    sudo -u "$SUDO_USER" $aur_helper -S --noconfirm --needed "${packages[@]}"
+                else
+                    error "Cannot install AUR packages as root. Run nvidia-setup with sudo as a normal user."
+                fi
+            else
+                $aur_helper -S --noconfirm --needed "${packages[@]}"
+            fi
+        fi
+    fi
+}
+
 # Get the user's home directory path
 get_user_home() {
     if [[ -n "$CHROOT_USER" ]]; then
@@ -140,51 +199,99 @@ fi
 # ==============================================================================
 header "Selecting Driver Package"
 
-# Determine GPU generation from lspci output
-# nvidia-open-dkms (open kernel modules) - REQUIRED or recommended for:
-#   - Blackwell (50xx series) - REQUIRED
-#   - Ada Lovelace (40xx series) - recommended
-#   - Ampere (30xx series) - recommended
-#   - Turing (20xx series, GTX 16xx) - recommended
+# GPU Generation Detection
 #
-# nvidia-dkms (proprietary kernel modules) - for:
-#   - Pascal (10xx series)
-#   - Maxwell (9xx series)
-#   - Older GPUs
+# NVIDIA Driver 590+ Support Matrix:
+#   - Turing and newer (GTX 16xx, RTX 20xx+): nvidia-open-dkms (official repo)
+#   - Pascal and older (GTX 10xx, 9xx, etc.): nvidia-580xx-dkms (AUR - legacy)
+#
+# The open kernel modules are now the default for supported GPUs.
 
-NVIDIA_DRIVER_PACKAGE="nvidia-dkms"  # Default to proprietary
+NVIDIA_DRIVER_PACKAGE=""
+NVIDIA_UTILS_PACKAGE=""
+LEGACY_GPU=false
 
-# Check for Blackwell (50xx) - REQUIRES open modules
+# Check for Turing and newer (supported by driver 590+)
 if echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(50[0-9][0-9]|5090|5080|5070|5060|5050)'; then
+    # Blackwell (50xx)
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
-    info "Detected Blackwell (50xx) GPU - nvidia-open-dkms REQUIRED"
-# Check for Ada Lovelace (40xx)
+    NVIDIA_UTILS_PACKAGE="nvidia-utils"
+    info "Detected Blackwell (50xx) GPU - nvidia-open-dkms"
 elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(40[0-9][0-9]|4090|4080|4070|4060|4050)'; then
+    # Ada Lovelace (40xx)
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
-    info "Detected Ada Lovelace (40xx) GPU - using nvidia-open-dkms (recommended)"
-# Check for Ampere (30xx)
+    NVIDIA_UTILS_PACKAGE="nvidia-utils"
+    info "Detected Ada Lovelace (40xx) GPU - nvidia-open-dkms"
 elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(30[0-9][0-9]|3090|3080|3070|3060|3050)'; then
+    # Ampere (30xx)
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
-    info "Detected Ampere (30xx) GPU - using nvidia-open-dkms (recommended)"
-# Check for Turing (20xx and GTX 16xx)
+    NVIDIA_UTILS_PACKAGE="nvidia-utils"
+    info "Detected Ampere (30xx) GPU - nvidia-open-dkms"
 elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX.*(20[0-9][0-9]|2080|2070|2060)|GTX.*(16[0-9][0-9]|1660|1650|1630)'; then
+    # Turing (20xx and GTX 16xx)
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
-    info "Detected Turing (20xx/16xx) GPU - using nvidia-open-dkms (recommended)"
-# Check for Pascal (10xx) - uses proprietary
+    NVIDIA_UTILS_PACKAGE="nvidia-utils"
+    info "Detected Turing (20xx/16xx) GPU - nvidia-open-dkms"
 elif echo "$DETECTED_NVIDIA" | grep -qiE 'GTX.*(10[0-9][0-9]|1080|1070|1060|1050|1030)|GT.?10[0-9][0-9]'; then
-    NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
-    info "Detected Pascal (10xx) GPU - using nvidia-dkms"
-# Check for Maxwell (9xx) - uses proprietary
+    # Pascal (10xx) - LEGACY
+    NVIDIA_DRIVER_PACKAGE="nvidia-580xx-dkms"
+    NVIDIA_UTILS_PACKAGE="nvidia-580xx-utils"
+    LEGACY_GPU=true
+    warn "Detected Pascal (10xx) GPU - LEGACY driver required"
 elif echo "$DETECTED_NVIDIA" | grep -qiE 'GTX.*(9[0-9][0-9]|980|970|960|950)|GT.?9[0-9][0-9]'; then
-    NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
-    info "Detected Maxwell (9xx) GPU - using nvidia-dkms"
-# Fallback for unrecognized but modern-looking GPUs
+    # Maxwell (9xx) - LEGACY
+    NVIDIA_DRIVER_PACKAGE="nvidia-580xx-dkms"
+    NVIDIA_UTILS_PACKAGE="nvidia-580xx-utils"
+    LEGACY_GPU=true
+    warn "Detected Maxwell (9xx) GPU - LEGACY driver required"
 elif echo "$DETECTED_NVIDIA" | grep -qiE 'RTX'; then
+    # Unknown RTX - assume modern
     NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
-    info "Detected RTX GPU - using nvidia-open-dkms (recommended for RTX)"
+    NVIDIA_UTILS_PACKAGE="nvidia-utils"
+    info "Detected RTX GPU - nvidia-open-dkms"
 else
-    NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
-    info "Detected older/unrecognized GPU - using nvidia-dkms (proprietary)"
+    # Older/unrecognized - LEGACY
+    NVIDIA_DRIVER_PACKAGE="nvidia-580xx-dkms"
+    NVIDIA_UTILS_PACKAGE="nvidia-580xx-utils"
+    LEGACY_GPU=true
+    warn "Detected older/unrecognized GPU - LEGACY driver required"
+fi
+
+# Display legacy GPU warning and check requirements
+if [[ "$LEGACY_GPU" == "true" ]]; then
+    echo ""
+    warn "════════════════════════════════════════════════════════════════"
+    warn "  LEGACY GPU DETECTED"
+    warn "════════════════════════════════════════════════════════════════"
+    echo ""
+    echo "  NVIDIA driver 590+ no longer supports your GPU."
+    echo "  The legacy nvidia-580xx driver from AUR will be installed."
+    echo ""
+    echo "  GPU: $(echo "$DETECTED_NVIDIA" | sed 's/.*: //')"
+    echo "  Driver: $NVIDIA_DRIVER_PACKAGE (AUR)"
+    echo ""
+
+    # Check requirements for online mode (not in offline mode)
+    if ! is_offline_mode; then
+        AUR_HELPER=$(get_aur_helper)
+        if [[ -z "$AUR_HELPER" ]]; then
+            warn "════════════════════════════════════════════════════════════════"
+            echo ""
+            echo "  No AUR helper found!"
+            echo ""
+            echo "  Legacy NVIDIA drivers require an AUR helper (paru or yay)."
+            echo ""
+            echo "  Install one first:"
+            echo "    sudo pacman -S paru   (or yay)"
+            echo ""
+            echo "  Then run nvidia-setup again."
+            echo ""
+            exit 1
+        fi
+        info "AUR helper found: $AUR_HELPER"
+    fi
+    warn "════════════════════════════════════════════════════════════════"
+    echo ""
 fi
 
 # Check which kernel is installed and set appropriate headers package
@@ -233,12 +340,27 @@ else
     echo "  - Setup type: Dedicated NVIDIA"
 fi
 echo ""
-echo "Packages to install:"
-echo "  - Driver: $NVIDIA_DRIVER_PACKAGE"
-echo "  - Headers: $KERNEL_HEADERS"
-echo "  - Utils: nvidia-utils, lib32-nvidia-utils"
-echo "  - Wayland: egl-wayland, libva-nvidia-driver"
+
+if [[ "$LEGACY_GPU" == "true" ]]; then
+    echo "Driver information:"
+    echo "  - Status: LEGACY GPU (not supported by driver 590+)"
+    echo "  - Driver: $NVIDIA_DRIVER_PACKAGE (AUR)"
+    echo "  - Utils: $NVIDIA_UTILS_PACKAGE, lib32-$NVIDIA_UTILS_PACKAGE"
+    echo "  - Headers: $KERNEL_HEADERS"
+    if is_offline_mode; then
+        echo "  - Source: Offline repository (pre-built)"
+    else
+        echo "  - Source: AUR via $(get_aur_helper)"
+    fi
+else
+    echo "Packages to install:"
+    echo "  - Driver: $NVIDIA_DRIVER_PACKAGE"
+    echo "  - Headers: $KERNEL_HEADERS"
+    echo "  - Utils: nvidia-utils, lib32-nvidia-utils"
+    echo "  - Wayland: egl-wayland, libva-nvidia-driver"
+fi
 echo ""
+
 echo "System modifications:"
 echo "  - /etc/modprobe.d/nvidia.conf (DRM modeset)"
 echo "  - /etc/mkinitcpio.conf (early KMS modules)"
@@ -290,23 +412,53 @@ else
     run_cmd pacman -Syu --noconfirm
 fi
 
-PACKAGES_TO_INSTALL=(
-    "${KERNEL_HEADERS}"
-    "${NVIDIA_DRIVER_PACKAGE}"
-    "nvidia-utils"
-    "lib32-nvidia-utils"
-    "egl-wayland"
-    "libva-nvidia-driver"   # VA-API hardware video acceleration
-    "nvidia-settings"       # GUI configuration tool
-    "qt5-wayland"
-    "qt6-wayland"
-)
+# Build package lists based on GPU type
+if [[ "$LEGACY_GPU" == "true" ]]; then
+    # Legacy GPU: AUR driver packages + official support packages
+    AUR_DRIVER_PACKAGES=(
+        "${NVIDIA_DRIVER_PACKAGE}"          # nvidia-580xx-dkms
+        "${NVIDIA_UTILS_PACKAGE}"           # nvidia-580xx-utils
+        "lib32-${NVIDIA_UTILS_PACKAGE}"     # lib32-nvidia-580xx-utils
+        "nvidia-580xx-settings"             # GUI configuration tool
+    )
 
-info "Installing NVIDIA packages..."
-echo "  Packages: ${PACKAGES_TO_INSTALL[*]}"
-echo ""
+    OFFICIAL_PACKAGES=(
+        "${KERNEL_HEADERS}"
+        "egl-wayland"
+        "qt5-wayland"
+        "qt6-wayland"
+    )
 
-pkg_install "${PACKAGES_TO_INSTALL[@]}"
+    # Install official packages first
+    info "Installing official packages..."
+    echo "  Packages: ${OFFICIAL_PACKAGES[*]}"
+    echo ""
+    pkg_install "${OFFICIAL_PACKAGES[@]}"
+
+    # Install AUR driver packages (handles offline vs online)
+    info "Installing legacy NVIDIA driver packages..."
+    echo "  Packages: ${AUR_DRIVER_PACKAGES[*]}"
+    echo ""
+    aur_install "${AUR_DRIVER_PACKAGES[@]}"
+else
+    # Modern GPU: all official packages
+    PACKAGES_TO_INSTALL=(
+        "${KERNEL_HEADERS}"
+        "${NVIDIA_DRIVER_PACKAGE}"          # nvidia-open-dkms
+        "nvidia-utils"
+        "lib32-nvidia-utils"
+        "egl-wayland"
+        "libva-nvidia-driver"               # VA-API hardware video acceleration
+        "nvidia-settings"                   # GUI configuration tool
+        "qt5-wayland"
+        "qt6-wayland"
+    )
+
+    info "Installing NVIDIA packages..."
+    echo "  Packages: ${PACKAGES_TO_INSTALL[*]}"
+    echo ""
+    pkg_install "${PACKAGES_TO_INSTALL[@]}"
+fi
 
 # ==============================================================================
 # Modprobe Configuration

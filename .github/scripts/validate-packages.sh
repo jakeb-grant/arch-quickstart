@@ -112,6 +112,16 @@ while IFS= read -r package; do
     AUR_PACKAGES="$AUR_PACKAGES $package"
 done < "$BASE_PATH/archiso/airootfs/root/aur-packages.x86_64"
 
+# Also validate setup-aur-packages if it exists (legacy NVIDIA drivers, etc.)
+SETUP_AUR_FILE="$BASE_PATH/archiso/airootfs/root/setup-aur-packages.x86_64"
+if [[ -f "$SETUP_AUR_FILE" ]]; then
+    echo "Validating setup-script AUR packages (setup-aur-packages.x86_64)..."
+    while IFS= read -r package; do
+        [[ -z "$package" ]] || [[ "$package" =~ ^# ]] && continue
+        AUR_PACKAGES="$AUR_PACKAGES $package"
+    done < "$SETUP_AUR_FILE"
+fi
+
 if [[ -n "$AUR_PACKAGES" ]]; then
     # Build query string for AUR RPC
     QUERY_ARGS=""
