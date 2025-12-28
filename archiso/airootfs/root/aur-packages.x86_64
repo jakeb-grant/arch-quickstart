@@ -17,7 +17,6 @@ elephant-1password-bin
 elephant-clipboard-bin
 elephant-calc-bin
 elephant-desktopapplications-bin
-elephant-archlinuxpkgs-bin
 elephant-runner-bin
 
 # Awww wallpaper system
@@ -31,3 +30,7 @@ claude-code
 spotify
 1password
 1password-cli
+
+# Utilities
+hyprpier-git
+upkeep-git
