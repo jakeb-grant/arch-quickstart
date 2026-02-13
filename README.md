@@ -5,7 +5,7 @@ A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop enviro
 ## Related Repositories
 
 - **[jakeb-grant/dotfiles](https://github.com/jakeb-grant/dotfiles)** - Personal dotfiles managed with chezmoi. The installer can optionally apply these during installation.
-- See the section of the README on configuration files for additional detail. Your dotefiles repo must be managed with chezmoi and you must make sure that all Arch packages you want on your base system are contained in either `archiso/airootfs/root/target-packages.x86_64`(for packages contained in the standard repos) or `archiso/airootfs/root/aur-packages.x86_64` (for AUR packages).
+- See the section of the README on configuration files for additional detail. Your dotfiles repo must be managed with chezmoi and you must make sure that all Arch packages you want on your base system are contained in either `archiso/airootfs/root/target-packages.x86_64`(for packages contained in the standard repos) or `archiso/airootfs/root/aur-packages.x86_64` (for AUR packages).
 
 ## Installation Flow
 
@@ -30,7 +30,7 @@ The TUI installer launches automatically and guides you through:
 - Requires double confirmation before wiping
 
 #### System Configuration
-- **Machine type**: Select `laptop` or `desktop`
+- **Hostname**: Text input, pre-filled with default (configurable)
 - **Username**: Pre-filled with default (configurable)
 - **Password**: Enter and confirm
 - **Disk encryption**: Optional LUKS encryption (can use same password)
@@ -67,9 +67,9 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - RAM > 16GB: Capped at 16GB
 
 #### Packages Installed
-~70 packages including the full Hyprland desktop, plus AUR packages via yay:
+~80 packages including the full Hyprland desktop, plus AUR packages via yay:
 - `walker-bin` - Application launcher
-- `elephant` + providers - Application indexer for Walker
+- `elephant-bin` + providers - Application indexer for Walker
 
 #### System Configuration Applied
 - Locale: `en_US.UTF-8`
@@ -90,7 +90,7 @@ After reboot:
 ### 4. Post-Install Setup
 
 The installer automatically configures:
-- **Bluetooth** (bluez + blueman)
+- **Bluetooth** (bluez + bluetui)
 - **Printing** (CUPS + drivers)
 - **Firewall** (UFW with user-selected rules)
 - **GPU drivers** (based on detected hardware)
@@ -149,7 +149,7 @@ This requires network access as ROCm packages are not included in the offline IS
 #### System Features
 
 ```bash
-bluetooth-setup   # Bluetooth + Blueman GUI
+bluetooth-setup   # Bluetooth + Bluetui TUI
 printer-setup     # CUPS + drivers
 firewall-setup    # UFW with interactive rules
 dotfiles-setup    # Clone your dotfiles repo
@@ -212,12 +212,14 @@ For offline builds with pre-loaded packages, use the GitHub Actions workflow.
 
 ```bash
 DEFAULT_USERNAME="jacob"
-DEFAULT_HOSTNAME_OPTIONS=("laptop" "desktop")
+DEFAULT_HOSTNAME="archlinux"
 GIT_USER_NAME="jacob"
 GIT_USER_EMAIL="86214494+jakeb-grant@users.noreply.github.com"
 DEFAULT_TIMEZONE="America/Denver"
 DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_KEYMAP="us"
+DEFAULT_FONT="ter-116n"
+DEFAULT_SHELL="/bin/bash"
 ```
 
 ### `dotfiles.conf` - Offline Dotfiles
@@ -245,9 +247,9 @@ Packages included in the offline repository but **not auto-installed**. These ar
 
 | Category | Packages | Used By |
 |----------|----------|---------|
-| NVIDIA | `nvidia-dkms`, `nvidia-open-dkms`, `nvidia-utils`, etc. | `nvidia-setup` |
+| NVIDIA | `nvidia-open-dkms`, `nvidia-utils`, `egl-wayland`, etc. | `nvidia-setup` |
 | Intel | `mesa`, `vulkan-intel`, `intel-media-driver`, etc. | `intel-setup` |
-| AMD | `vulkan-radeon`, `libva-mesa-driver`, etc. | `amd-setup` |
+| AMD | `vulkan-radeon`, `vulkan-tools`, etc. | `amd-setup` |
 | Firewall | `ufw` | `firewall-setup` |
 | Printing | `cups`, `ghostscript`, `gutenprint`, etc. | `printer-setup` |
 
@@ -280,7 +282,8 @@ archiso/
 │   │   ├── install.conf       # Installer defaults
 │   │   ├── target-packages.x86_64  # Target system packages (always installed)
 │   │   ├── aur-packages.x86_64     # AUR packages (always installed)
-│   │   └── setup-packages.x86_64   # Setup script packages (on-demand)
+│   │   ├── setup-packages.x86_64   # Setup script packages (on-demand)
+│   │   └── setup-aur-packages.x86_64  # Setup AUR packages (on-demand)
 │   └── usr/local/bin/
 │       ├── hyprland-install   # Main TUI installer
 │       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
