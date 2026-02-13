@@ -57,6 +57,7 @@ pacman -Sy
 # Validate official packages
 # =============================================================================
 INVALID_PACKAGES=""
+INVALID_AUR=""
 
 echo ""
 echo "Validating live ISO packages (packages.x86_64)..."
@@ -94,11 +95,10 @@ if [[ -n "$INVALID_PACKAGES" ]]; then
     echo ""
     echo "ERROR: The following official packages were not found in repositories:"
     echo "$INVALID_PACKAGES"
-    exit 1
+else
+    echo ""
+    echo "✓ All official packages validated"
 fi
-
-echo ""
-echo "✓ All official packages validated"
 
 # =============================================================================
 # Validate AUR packages
@@ -141,7 +141,6 @@ if [[ -n "$AUR_PACKAGES" ]]; then
 
     FOUND_PACKAGES=$(echo "$AUR_RESPONSE" | jq -r '.results[].Name')
 
-    INVALID_AUR=""
     for pkg in $AUR_PACKAGES; do
         if ! echo "$FOUND_PACKAGES" | grep -qx "$pkg"; then
             echo "❌ Invalid AUR package: $pkg"
@@ -153,12 +152,22 @@ if [[ -n "$AUR_PACKAGES" ]]; then
         echo ""
         echo "ERROR: The following AUR packages were not found:"
         echo "$INVALID_AUR"
-        exit 1
+    else
+        echo "✓ All AUR packages validated"
     fi
-
-    echo "✓ All AUR packages validated"
 else
     echo "No AUR packages to validate"
+fi
+
+# =============================================================================
+# Final summary
+# =============================================================================
+if [[ -n "$INVALID_PACKAGES" ]] || [[ -n "$INVALID_AUR" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "Package validation FAILED"
+    echo "=========================================="
+    exit 1
 fi
 
 echo ""
