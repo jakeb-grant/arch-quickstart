@@ -23,14 +23,18 @@ elephant-runner-bin
 awww-git
 
 # Dev tools
-bun-bin
 claude-code
 
 # Applications
+onlyoffice-bin
 spotify
 1password
 1password-cli
 
+# Dev tools (CLI)
+railwayapp-cli
+
 # Utilities
 hyprpier-git
 upkeep-git
+phylax-git
