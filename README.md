@@ -67,9 +67,7 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - RAM > 16GB: Capped at 16GB
 
 #### Packages Installed
-~80 packages including the full Hyprland desktop, plus AUR packages via yay:
-- `walker-bin` - Application launcher
-- `elephant-bin` + providers - Application indexer for Walker
+~80 packages including the full Hyprland desktop (with quickshell), plus AUR packages via yay.
 
 #### System Configuration Applied
 - Locale: `en_US.UTF-8`
@@ -78,12 +76,12 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - Multilib repository: Enabled (for 32-bit support)
 - Git configured with name/email
 - GRUB bootloader (UEFI)
-- Services enabled: iwd, systemd-resolved, SDDM
+- Services enabled: iwd, systemd-resolved, greetd
 
 ### 3. First Boot
 
 After reboot:
-1. SDDM login screen appears
+1. greetd/tuigreet login screen appears
 2. Log in with your username/password
 3. Hyprland starts automatically
 
