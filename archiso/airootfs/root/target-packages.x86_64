@@ -33,7 +33,7 @@ hyprland
 # sddm
 greetd
 greetd-tuigreet
-waybar
+# waybar
 hyprlock
 hypridle
 
@@ -119,7 +119,7 @@ wl-clipboard
 cliphist
 wtype
 hyprpicker
-swaync
+# swaync
 brightnessctl
 power-profiles-daemon
 btop
