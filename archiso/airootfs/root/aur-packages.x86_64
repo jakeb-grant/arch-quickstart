@@ -7,17 +7,17 @@
 # Yay AUR helper (always built first)
 yay-bin
 
-# Walker application launcher and Elephant indexer 
-walker-bin
-elephant-bin
-elephant-files-bin
-elephant-menus-bin
-elephant-windows-bin
-elephant-1password-bin
-elephant-clipboard-bin
-elephant-calc-bin
-elephant-desktopapplications-bin
-elephant-runner-bin
+# Walker application launcher and Elephant indexer
+# walker-bin
+# elephant-bin
+# elephant-files-bin
+# elephant-menus-bin
+# elephant-windows-bin
+# elephant-1password-bin
+# elephant-clipboard-bin
+# elephant-calc-bin
+# elephant-desktopapplications-bin
+# elephant-runner-bin
 
 # Awww wallpaper system
 awww-git

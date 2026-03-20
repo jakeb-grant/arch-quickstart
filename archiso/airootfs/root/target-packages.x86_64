@@ -30,7 +30,9 @@ intel-ucode
 
 # Core
 hyprland
-sddm
+# sddm
+greetd
+greetd-tuigreet
 waybar
 hyprlock
 hypridle
@@ -40,6 +42,9 @@ xdg-desktop-portal-hyprland
 xdg-desktop-portal-gtk
 qt5-wayland
 qt6-wayland
+
+# Shell
+quickshell
 
 # =============================================================================
 # Terminal & Editor
@@ -61,6 +66,7 @@ yazi
 # Fonts
 # =============================================================================
 ttf-jetbrains-mono-nerd
+ttf-material-symbols-variable
 noto-fonts
 noto-fonts-emoji
 
@@ -110,10 +116,12 @@ lazydocker
 grim
 slurp
 wl-clipboard
+cliphist
 wtype
 hyprpicker
 swaync
 brightnessctl
+power-profiles-daemon
 btop
 fastfetch
 man-db
