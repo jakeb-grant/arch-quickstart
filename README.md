@@ -1,6 +1,8 @@
 # Hyprland Arch Linux ISO
 
-A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop environment. I use this to maintain clean Arch Linux installations, managed in accordance with my dotfiles.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop environment. Boot from USB, answer a few prompts, and walk away with a fully configured Hyprland desktop — GPU drivers, Bluetooth, printing, firewall, and your dotfiles all handled, online or completely air-gapped.
 
 ## Related Repositories
 
