@@ -963,6 +963,41 @@ EOF
     arch-chroot /mnt systemctl enable systemd-resolved
     arch-chroot /mnt systemctl enable greetd
 
+    # Configure greetd with tuigreet
+    info "  Configuring greetd..."
+    mkdir -p /mnt/etc/greetd
+    cat > /mnt/etc/greetd/config.toml << 'EOF'
+[terminal]
+vt = 1
+
+[default_session]
+command = "tuigreet --remember --remember-session --time --asterisks --cmd 'start-hyprland &>/dev/null'"
+user = "greeter"
+EOF
+    chmod 644 /mnt/etc/greetd/config.toml
+
+    # Configure greetd PAM with gnome-keyring support
+    cat > /mnt/etc/pam.d/greetd << 'PAMEOF'
+#%PAM-1.0
+
+auth       required     pam_securetty.so
+auth       requisite    pam_nologin.so
+auth       include      system-local-login
+-auth      optional     pam_gnome_keyring.so
+
+account    include      system-local-login
+
+password   include      system-local-login
+-password  optional     pam_gnome_keyring.so    use_authtok
+
+session    include      system-local-login
+-session   optional     pam_gnome_keyring.so    auto_start
+PAMEOF
+    chmod 644 /mnt/etc/pam.d/greetd
+
+    # Ensure greeter user can access greetd
+    arch-chroot /mnt usermod -aG video greeter 2>/dev/null || true
+
     # Configure iwd with systemd-resolved
     info "  Configuring iwd..."
     mkdir -p /mnt/etc/iwd
