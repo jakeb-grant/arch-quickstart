@@ -125,6 +125,15 @@ fi
 info "Intel GPU detected:"
 echo "  $DETECTED_INTEL"
 
+# Determine integrated vs discrete using PCI bus address
+# Integrated GPUs are always at 00:02.0; discrete appear at higher addresses
+PCI_ADDRESS=$(lspci | grep -iE 'intel.*(graphics|hd|uhd|iris|xe|arc)' | head -1 | awk '{print $1}')
+if [[ "$PCI_ADDRESS" == "00:02.0" ]]; then
+    GPU_TYPE="integrated"
+else
+    GPU_TYPE="discrete"
+fi
+
 # ==============================================================================
 # Driver Selection
 # ==============================================================================
@@ -136,7 +145,8 @@ header "Selecting Driver Package"
 #   - HD Graphics 5xxx, 6xxx
 #   - UHD Graphics 6xx, 7xx
 #   - Iris Xe
-#   - Arc GPUs
+#   - Arc GPUs (integrated and discrete)
+#   - Panther Lake Xe3, Lunar Lake Xe2, Meteor Lake Xe-LPG
 #
 # libva-intel-driver: For older Intel GPUs
 #   - GMA series
@@ -145,43 +155,49 @@ header "Selecting Driver Package"
 VAAPI_DRIVER=""
 DRIVER_REASON=""
 
-# Check for Arc (discrete)
-if echo "$DETECTED_INTEL" | grep -qiE 'arc'; then
+# Check for Panther Lake (Xe3)
+if echo "$DETECTED_INTEL" | grep -qiE 'panther lake'; then
     VAAPI_DRIVER="intel-media-driver"
-    DRIVER_REASON="Intel Arc discrete GPU"
-    GPU_TYPE="discrete"
-# Check for Xe graphics
+    DRIVER_REASON="Intel Xe3 graphics (Panther Lake)"
+# Check for Lunar Lake (Xe2)
+elif echo "$DETECTED_INTEL" | grep -qiE 'lunar lake'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel Xe2 graphics (Lunar Lake)"
+# Check for Meteor Lake (Xe-LPG)
+elif echo "$DETECTED_INTEL" | grep -qiE 'meteor lake'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel Xe graphics (Meteor Lake)"
+# Check for Arc (discrete or integrated branding)
+elif echo "$DETECTED_INTEL" | grep -qiE 'arc'; then
+    VAAPI_DRIVER="intel-media-driver"
+    DRIVER_REASON="Intel Arc graphics"
+# Check for Xe/Iris graphics
 elif echo "$DETECTED_INTEL" | grep -qiE 'xe|iris'; then
     VAAPI_DRIVER="intel-media-driver"
     DRIVER_REASON="Intel Xe/Iris graphics (Gen 11+)"
-    GPU_TYPE="integrated"
 # Check for UHD graphics
 elif echo "$DETECTED_INTEL" | grep -qiE 'uhd'; then
     VAAPI_DRIVER="intel-media-driver"
     DRIVER_REASON="Intel UHD Graphics (Gen 9+)"
-    GPU_TYPE="integrated"
 # Check for HD 5xxx/6xxx (Broadwell+)
 elif echo "$DETECTED_INTEL" | grep -qiE 'hd graphics [56][0-9][0-9]'; then
     VAAPI_DRIVER="intel-media-driver"
     DRIVER_REASON="Intel HD Graphics 5xxx/6xxx (Broadwell+)"
-    GPU_TYPE="integrated"
 # Check for older HD graphics
 elif echo "$DETECTED_INTEL" | grep -qiE 'hd graphics [234][0-9][0-9]|hd graphics [0-9][0-9][0-9]'; then
     VAAPI_DRIVER="libva-intel-driver"
     DRIVER_REASON="Intel HD Graphics (older generation)"
-    GPU_TYPE="integrated"
 # Check for GMA (very old)
 elif echo "$DETECTED_INTEL" | grep -qiE 'gma'; then
     VAAPI_DRIVER="libva-intel-driver"
     DRIVER_REASON="Intel GMA (legacy)"
-    GPU_TYPE="integrated"
 else
     # Default to modern driver for unrecognized Intel GPUs
     VAAPI_DRIVER="intel-media-driver"
     DRIVER_REASON="Intel GPU (defaulting to modern driver)"
-    GPU_TYPE="integrated"
 fi
 
+info "GPU type: $GPU_TYPE (PCI address: $PCI_ADDRESS)"
 info "Selected VA-API driver: $VAAPI_DRIVER"
 info "Reason: $DRIVER_REASON"
 
@@ -208,9 +224,10 @@ PACKAGES=(
     "qt6-wayland"
 )
 
-# Add Intel compute runtime for Arc GPUs
+# Add Intel compute runtime for discrete Arc GPUs
 if [[ "$GPU_TYPE" == "discrete" ]]; then
     PACKAGES+=("intel-compute-runtime")
+    info "Discrete GPU detected - including intel-compute-runtime for OpenCL"
 fi
 
 echo "Packages to install:"
@@ -313,8 +330,8 @@ if [[ -z "$CHROOT_TARGET" ]]; then
     echo ""
 
     if [[ "$GPU_TYPE" == "discrete" ]]; then
-        echo "Arc GPU Notes:"
-        echo "  - Intel Arc is a discrete GPU with full compute support"
+        echo "Discrete Arc GPU Notes:"
         echo "  - OpenCL workloads are supported via intel-compute-runtime"
+        echo "  - For OpenCL on integrated GPUs, install intel-compute-runtime manually"
     fi
 fi

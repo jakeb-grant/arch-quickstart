@@ -466,7 +466,10 @@ fi
 header "Configuring Kernel Modules"
 
 info "Creating /etc/modprobe.d/nvidia.conf..."
-echo "options nvidia_drm modeset=1" > "$(target_path /etc/modprobe.d/nvidia.conf)"
+cat > "$(target_path /etc/modprobe.d/nvidia.conf)" <<'EOF'
+options nvidia_drm modeset=1
+options nvidia_drm fbdev=1
+EOF
 
 # ==============================================================================
 # Mkinitcpio Configuration

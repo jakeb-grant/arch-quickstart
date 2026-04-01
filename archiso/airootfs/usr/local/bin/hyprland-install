@@ -585,33 +585,41 @@ configure_extras() {
     fi
     echo
 
-    # Build GPU options and determine recommendation
+    # Build GPU options - always show all, mark detected ones
     local gpu_options=()
     local recommended=""
 
+    # NVIDIA option
     if [[ -n "$DETECTED_NVIDIA" ]]; then
-        # NVIDIA present - check for hybrid
         if [[ -n "$DETECTED_INTEL" || "$amd_is_igpu" == "true" ]]; then
-            gpu_options+=("nvidia-setup (hybrid graphics - recommended)")
-            recommended="nvidia-setup (hybrid graphics - recommended)"
+            gpu_options+=("nvidia-setup (hybrid graphics - detected)")
+            recommended="nvidia-setup (hybrid graphics - detected)"
         else
-            gpu_options+=("nvidia-setup (NVIDIA)")
-            recommended="nvidia-setup (NVIDIA)"
+            gpu_options+=("nvidia-setup (NVIDIA - detected)")
+            recommended="nvidia-setup (NVIDIA - detected)"
         fi
+    else
+        gpu_options+=("nvidia-setup (NVIDIA)")
     fi
 
-    if [[ -n "$DETECTED_INTEL" && -z "$DETECTED_NVIDIA" ]]; then
+    # Intel option
+    if [[ -n "$DETECTED_INTEL" ]]; then
+        gpu_options+=("intel-setup (Intel - detected)")
+        [[ -z "$recommended" ]] && recommended="intel-setup (Intel - detected)"
+    else
         gpu_options+=("intel-setup (Intel)")
-        [[ -z "$recommended" ]] && recommended="intel-setup (Intel)"
     fi
 
-    if [[ -n "$DETECTED_AMD" && -z "$DETECTED_NVIDIA" ]]; then
+    # AMD option
+    if [[ -n "$DETECTED_AMD" ]]; then
         if [[ "$amd_is_igpu" == "true" ]]; then
-            gpu_options+=("amd-setup (AMD integrated)")
+            gpu_options+=("amd-setup (AMD integrated - detected)")
         else
-            gpu_options+=("amd-setup (AMD discrete)")
+            gpu_options+=("amd-setup (AMD discrete - detected)")
         fi
         [[ -z "$recommended" ]] && recommended="${gpu_options[-1]}"
+    else
+        gpu_options+=("amd-setup (AMD)")
     fi
 
     # Always add skip option
