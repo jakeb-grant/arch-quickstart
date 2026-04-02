@@ -23,6 +23,7 @@ ntfs-3g
 # Hardware support
 amd-ucode
 intel-ucode
+sof-firmware
 
 # =============================================================================
 # Desktop Environment - Hyprland
