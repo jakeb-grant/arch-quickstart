@@ -38,6 +38,7 @@ vesktop-bin
 
 # Dev tools (CLI)
 railwayapp-cli
+cloudflared
 
 # Utilities
 pane-fm-git
