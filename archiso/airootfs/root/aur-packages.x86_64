@@ -23,25 +23,25 @@ yay-bin
 awww-git
 
 # Dev tools
+bruno-bin
 claude-code
-
-# Applications
-google-chrome
-onlyoffice-bin
-localsend-bin
-ventoy-bin
-spotify
-slack-desktop
-vesktop-bin
-1password
-1password-cli
-
-# Dev tools (CLI)
 railwayapp-cli
 
+# Applications
+1password
+1password-cli
+google-chrome
+localsend-bin
+obsidian-bin
+onlyoffice-bin
+slack-desktop
+spotify
+ventoy-bin
+vesktop-bin
+
 # Utilities
-pane-fm-git
-hyprpier-git
-upkeep-git
-phylax-git
 downgrade
+hyprpier-git
+pane-fm-git
+phylax-git
+upkeep-git
