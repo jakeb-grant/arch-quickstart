@@ -19,6 +19,9 @@ yay-bin
 # elephant-desktopapplications-bin
 # elephant-runner-bin
 
+# Shell
+quickshell-git
+
 # Awww wallpaper system
 awww-git
 
