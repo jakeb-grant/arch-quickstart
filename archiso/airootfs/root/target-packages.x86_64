@@ -46,6 +46,7 @@ qt6-wayland
 
 # Desktop tooling
 cliphist
+polkit-gnome
 grim
 hyprpicker
 slurp

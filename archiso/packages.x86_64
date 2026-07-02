@@ -59,6 +59,7 @@ nvme-cli
 open-iscsi
 open-vm-tools
 pv
+qemu-guest-agent
 reflector
 rsync
 sdparm

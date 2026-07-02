@@ -6,7 +6,6 @@ enable systemd-networkd.service
 enable systemd-resolved.service
 enable iwd.service
 enable pacman-init.service
-enable choose-mirror.service
 enable reflector.service
 enable systemd-timesyncd.service
 

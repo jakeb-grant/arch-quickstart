@@ -929,9 +929,13 @@ EOF
         arch-chroot /mnt sudo -u "$USERNAME" git config --global init.defaultBranch main
     fi
 
-    # Enable sudo for wheel group
+    # Enable sudo for wheel group. Root has no password, so this drop-in is
+    # the only path to privilege escalation — validate it or the install is
+    # unadministrable.
     info "  Configuring sudo..."
-    sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers
+    echo '%wheel ALL=(ALL:ALL) ALL' > /mnt/etc/sudoers.d/10-wheel
+    chmod 440 /mnt/etc/sudoers.d/10-wheel
+    arch-chroot /mnt visudo -cf /etc/sudoers.d/10-wheel
 
     # Configure encryption if enabled
     if [[ "$ENCRYPT_DISK" == "yes" ]]; then
