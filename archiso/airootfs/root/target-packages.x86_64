@@ -129,6 +129,7 @@ bun
 cloudflared
 docker
 docker-compose
+duckdb
 fnm
 git
 github-cli
@@ -162,5 +163,6 @@ age
 chezmoi
 curl
 imagemagick
+jq
 unzip
 wget

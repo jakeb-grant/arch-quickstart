@@ -20,7 +20,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
 | 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ✅ Fixed 2026-07-02, diff-reviewed (2 agents: 1 LGTM, 1 real finding fixed + re-verified) |
 | Unscheduled | L8, R3 (R2 completed with Section 5; L3 closed by design — fork note added to README) | ⬜ |
-| Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ⬜ |
+| Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 
 ---
 
