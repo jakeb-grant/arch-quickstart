@@ -157,6 +157,7 @@ aur_install() {
 
 # Populate DETECTED_NVIDIA / DETECTED_INTEL / DETECTED_AMD from lspci.
 # Callers skip this when the installer pre-detected GPUs via environment.
+# shellcheck disable=SC2034  # globals consumed by the sourcing scripts
 detect_gpus() {
     local all_gpus
     all_gpus=$(lspci | grep -iE 'vga|3d|display' || true)

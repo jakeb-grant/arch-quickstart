@@ -31,6 +31,7 @@ RESUME_OFFSET=""
 
 # Load configuration defaults
 if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null  # runtime config, not a static file
     source "$CONFIG_FILE"
 fi
 
@@ -39,6 +40,7 @@ DEFAULT_USERNAME="${DEFAULT_USERNAME:-user}"
 DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-America/Denver}"
 DEFAULT_LOCALE="${DEFAULT_LOCALE:-en_US.UTF-8}"
 DEFAULT_KEYMAP="${DEFAULT_KEYMAP:-us}"
+DEFAULT_FONT="${DEFAULT_FONT:-ter-116n}"
 DEFAULT_SHELL="${DEFAULT_SHELL:-/bin/bash}"
 GIT_USER_NAME="${GIT_USER_NAME:-}"
 GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
@@ -249,7 +251,7 @@ check_network() {
     echo
 
     # Check if WiFi interfaces exist
-    if [[ -d /sys/class/net ]] && ls /sys/class/net | grep -qE '^wl'; then
+    if compgen -G '/sys/class/net/wl*' > /dev/null; then
         if gum confirm "Would you like to connect to WiFi?"; then
             connect_wifi
         else
@@ -825,6 +827,9 @@ install_base() {
     echo "$DEFAULT_LOCALE UTF-8" > /mnt/etc/locale.gen
     echo "LANG=$DEFAULT_LOCALE" > /mnt/etc/locale.conf
     echo "KEYMAP=$DEFAULT_KEYMAP" > /mnt/etc/vconsole.conf
+    # terminus-font is in target-packages, so the console font from install.conf
+    # carries over to the installed system
+    [[ -z "$DEFAULT_FONT" ]] || echo "FONT=$DEFAULT_FONT" >> /mnt/etc/vconsole.conf
 
     # Read packages from file
     if [[ -f "$PACKAGES_FILE" ]]; then
@@ -1322,7 +1327,6 @@ setup_dotfiles() {
     info "Dotfiles Setup"
     echo
 
-    local dotfiles_source=""
     local local_dotfiles="/opt/dotfiles"
 
     # Check for pre-loaded dotfiles on the ISO (offline mode)
@@ -1474,9 +1478,12 @@ PACMANCONF
         "" \
         "Useful keybinds (defaults):" \
         "  SUPER + Enter    → Open terminal (Ghostty)" \
-        "  SUPER + D        → Application launcher (Walker)" \
+        "  SUPER + E        → File manager (yazi)" \
         "  SUPER + Q        → Close window" \
-        "  SUPER + 1-9      → Switch workspace"
+        "  SUPER + 1-9      → Switch workspace" \
+        "" \
+        "This is a base Hyprland setup - a bar, launcher, and theming" \
+        "come from your dotfiles (see dotfiles.conf) and package lists."
 
     echo
     if gum confirm "Reboot now?"; then

@@ -90,6 +90,7 @@ bluez-utils
 # =============================================================================
 noto-fonts
 noto-fonts-emoji
+terminus-font
 ttf-jetbrains-mono-nerd
 ttf-material-symbols-variable
 
@@ -133,6 +134,7 @@ git
 github-cli
 lazydocker
 rustup
+shellcheck
 uv
 
 # =============================================================================

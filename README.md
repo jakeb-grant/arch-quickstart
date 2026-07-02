@@ -69,7 +69,7 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - RAM > 16GB: Capped at 16GB
 
 #### Packages Installed
-~80 packages including the full Hyprland desktop (with quickshell), plus AUR packages via yay.
+~80 packages providing a base Hyprland desktop, plus AUR packages via yay. The base system boots to Hyprland with a terminal (Ghostty) and sane keybinds; a bar, launcher, and theming are expected to come from your dotfiles (see `dotfiles.conf`) — customize the package lists to preload whatever your dotfiles need (e.g. `quickshell-git` is included for the author's setup).
 
 #### System Configuration Applied
 - Locale: `en_US.UTF-8`

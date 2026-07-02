@@ -18,8 +18,9 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | 2. CI security | H3, H4, M1, M4, L1, L2 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
 | 3. Installer correctness | H2, M3, M8, L4 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
 | 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
-| 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ⬜ Next |
-| Unscheduled | L3, L8, R2, R3 | ⬜ |
+| 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ✅ Fixed 2026-07-02, diff-reviewed (2 agents: 1 LGTM, 1 real finding fixed + re-verified) |
+| Unscheduled | L3, L8, R3 (R2 completed with Section 5) | ⬜ |
+| Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ⬜ |
 
 ---
 
@@ -80,7 +81,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** `exec-once = /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1` but `polkit-gnome` is in no list, so no polkit agent runs. GUI privilege-escalation prompts (mounting, network config, etc.) never appear; some apps hang waiting.
 - **Fix:** Add `polkit-gnome` to `target-packages.x86_64`, or switch the autostart to an installed agent (e.g. `hyprpolkitagent`).
 
-### H8. No automated verification of the installer/scripts
+### ✅ H8. No automated verification of the installer/scripts — FIXED (CI `lint` job: `bash -n` over all scripts + shellcheck --severity=warning -x over maintained scripts; both build jobs gated with `needs: lint`; 6 shellcheck findings triaged — 3 code fixes, 3 directives)
 - **Where:** repo-wide; CI only builds ISOs
 - **Verified:** ✅
 - **What:** 4,200+ lines of destructive root bash with zero `bash -n`/`shellcheck`/tests. A syntax error or a bad edit ships to an ISO that wipes disks.
@@ -126,25 +127,25 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** Upstream ships this unit in its airootfs; this profile replaced airootfs without it. `systemctl preset` warns and mirror selection never runs (dead config).
 - **Fix:** Drop the preset line, or add the upstream `choose-mirror.service` unit + cmdline generator.
 
-### M7. Desktop advertised in README/finish-screen isn't wired up (Walker, quickshell, bar)
+### ✅ M7. Desktop advertised in README/finish-screen isn't wired up (Walker, quickshell, bar) — FIXED per Jacob's decision 2026-07-02: the base-Hyprland-plus-dotfiles design is intentional; removed Walker/Elephant entries from aur-packages, replaced the finish screen's false SUPER+D line with the real SUPER+E (yazi) bind + a "bar/launcher/theming come from your dotfiles" note, rewrote the README's "full desktop (with quickshell)" claim
 - **Where:** `hyprland-install:1440` ("SUPER + D → Walker"), `README.md:72`; `aur-packages.x86_64:11` (`walker-bin` commented), `target-packages.x86_64:37` (`waybar` commented); `hyprland.conf` has no `SUPER+D` bind and never execs quickshell
 - **Verified:** ✅
 - **What:** The installed desktop boots into Hyprland with no bar, no launcher, and no shell process, while docs and the finish screen promise a launcher keybind and "full desktop (with quickshell)." (May be intentional if dotfiles supply this — needs a decision.)
 - **Fix:** Either autostart quickshell/a bar and ship a launcher, or correct the README + finish-screen text to match what actually ships.
 
-### ✅ M8. `install.conf` defaults are duplicated as hardcoded fallbacks that disagree — FIXED (DEFAULT_SHELL fallback now /bin/bash, matching install.conf)
+### ✅ M8. `install.conf` defaults are duplicated as hardcoded fallbacks that disagree — FIXED (DEFAULT_SHELL fallback now /bin/bash, matching install.conf; Section 5 follow-up: dead `DEFAULT_FONT` wired — installer fallback, FONT= written to target vconsole.conf, terminus-font added to target-packages. DEFAULT_USERNAME's generic "user" fallback is intentional per L3)
 - **Where:** `install.conf:19` `DEFAULT_SHELL="/bin/bash"` vs `hyprland-install:38` `DEFAULT_SHELL="${DEFAULT_SHELL:-/bin/zsh}"`
 - **Verified:** ✅
 - **What:** If `install.conf` is ever missing/unreadable the shell silently flips to `/bin/zsh` (which isn't installed), contradicting the documented default. Same duplicated-fallback pattern for other defaults.
 - **Fix:** Make fallbacks match `install.conf`, or remove them and fail loudly if the config is missing.
 
-### M9. CI: AUR validation query is unbounded and unencoded
+### ✅ M9. CI: AUR validation query is unbounded and unencoded — FIXED (chunked POST to RPC v5 via `curl --data-urlencode`, 100 pkgs/chunk, `--retry 3`)
 - **Where:** `.github/scripts/validate-packages.sh:127-134`
 - **Verified:** ☑️
 - **What:** Package names are concatenated into a GET `arg[]=` query with no URL-encoding or chunking. A long list can exceed the AUR RPC request-length limit, yielding truncated results → real packages reported "invalid" (false failure) or missing ones passing spuriously.
 - **Fix:** Use POST (RPC v5 supports it) or `curl -G --data-urlencode`, and chunk the list.
 
-### M10. `validate-packages.sh` misses the failure classes that actually occur
+### ✅ M10. `validate-packages.sh` misses the failure classes that actually occur — FIXED (rewrite: installer-identical `read_package_list` parsing; new checks — AUR-listed pkg present in official repos [the cloudflared incident], duplicates within/across target-system lists, exec-once binaries resolve via `pacman -F` to a listed package [would have caught H7], setup-script literal installs present in offline-repo lists [ROCm exempt per H6]; all 8 failure classes exercised against a synthetic broken tree)
 - **Where:** `.github/scripts/validate-packages.sh`
 - **Verified:** ☑️
 - **What:** It only checks each listed package exists in a repo/AUR. It does not check packages *referenced by scripts/configs* are listed (would have caught H7 polkit-gnome), does not detect cross-list duplicates, and can't catch a repo package wrongly placed in the AUR list (passes either check).
@@ -180,7 +181,7 @@ The three GPU scripts share ~120 lines byte-for-byte (`run_cmd`, `pkg_install`, 
 
 ### R2. Single `read_package_list()` helper
 Package-list parsing exists in at least three forms (robust `while read` in the installer's AUR/offline paths, weak `grep` in `install_base`, a third variant in `validate-packages.sh`). Unify them so the installer, setup scripts, and validator agree on comments/whitespace/CR handling (fixes M3, reduces M10 risk).
-**Status:** installer side done with M3 (one helper, all 5 sites). Remaining: `validate-packages.sh` (fold into Section 5 / M10) and any setup-script parse sites (Section 4 / R1).
+**Status:** ✅ DONE. Installer side with M3 (one helper, all 5 sites); `validate-packages.sh` now carries a byte-identical copy of the helper (Section 5 / M10); setup scripts have no list-parse sites (Section 4 / R1). Note: the workflow's inline `mapfile < <(grep -v ...)` sites in build-iso.yml still use the weak parse, but every list they read is pre-validated by the rewritten validator in the same run.
 
 ### R3. Decompose the 1,490-line installer monolith
 Error handling leans entirely on a global `set -e` + ERR trap that pauses on `read`, which is fragile for a disk-wiping installer; several `|| true` calls mask failures. Consider explicit success checks + cleanup around the destructive steps (pacstrap, mkfs, cryptsetup, grub-install) and splitting into sourced modules. Lower priority than the correctness fixes above.
