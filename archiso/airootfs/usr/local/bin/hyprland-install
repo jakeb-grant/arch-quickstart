@@ -1041,8 +1041,12 @@ EOF
     # Link resolv.conf to systemd-resolved
     ln -sf /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf
 
-    # Copy setup scripts to installed system
+    # Copy setup scripts (and the shared library they source) to installed system
     info "  Installing setup scripts..."
+    if [[ -f /usr/local/lib/setup-common.sh ]]; then
+        mkdir -p /mnt/usr/local/lib
+        cp /usr/local/lib/setup-common.sh /mnt/usr/local/lib/
+    fi
     for script in nvidia-setup intel-setup amd-setup bluetooth-setup printer-setup firewall-setup dotfiles-setup; do
         if [[ -f "/usr/local/bin/$script" ]]; then
             cp "/usr/local/bin/$script" "/mnt/usr/local/bin/"

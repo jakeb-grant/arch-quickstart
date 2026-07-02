@@ -17,8 +17,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | 1. Security & profile config | C1, H1, H7, M5, M6, M11 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
 | 2. CI security | H3, H4, M1, M4, L1, L2 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
 | 3. Installer correctness | H2, M3, M8, L4 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
-| 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ⬜ Next |
-| 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ⬜ |
+| 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
+| 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ⬜ Next |
 | Unscheduled | L3, L8, R2, R3 | ⬜ |
 
 ---
@@ -62,13 +62,13 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** `source /workspace/archiso/dotfiles.conf` executes a checked-in file as shell as root inside the `--privileged` build container (which holds `GITHUB_TOKEN`). Reachable by any same-repo contributor via PR (the fork guard allows same-repo PRs); also breaks on any value containing spaces/`$(...)`.
 - **Fix:** Don't `source`. Parse the value (`grep -oP '^DOTFILES_REPO=\K.*'`) and validate it against `^https://` before use.
 
-### H5. `nvidia-setup` mkinitcpio edit is not idempotent — duplicates `nvidia` on re-run
+### ✅ H5. `nvidia-setup` mkinitcpio edit is not idempotent — duplicates `nvidia` on re-run — FIXED (word-boundary removal scoped to the MODULES= line; simulated: idempotent, heals already-duplicated files, leaves comments/HOOKS alone)
 - **Where:** `archiso/airootfs/usr/local/bin/nvidia-setup:501`
 - **Verified:** ✅ (reproduced by simulation)
 - **What:** The removal regex `s/ ?nvidia( |$)/ /g` requires a space or EOL after `nvidia`, so a bare `nvidia` immediately before `)` survives; the add-step then prepends the full list. `MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)` → `MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm nvidia)`.
 - **Fix:** Use word-boundary removal, e.g. `s/(nvidia_drm|nvidia_uvm|nvidia_modeset|nvidia|i915|amdgpu) ?//g` before re-adding, then trim.
 
-### H6. `amd-setup` ROCm install hard-fails on offline systems
+### ✅ H6. `amd-setup` ROCm install hard-fails on offline systems — FIXED (ROCm prompt skipped in offline mode with a "re-run once online" message; ROCm packages deliberately NOT added to the offline repo — multi-GB)
 - **Where:** `archiso/airootfs/usr/local/bin/amd-setup:221` — `rocm-opencl-runtime` / `rocm-hip-runtime` are in no package list
 - **Verified:** ✅ (`grep -rn rocm archiso/airootfs/root` → nothing)
 - **What:** On an offline-installed machine pacman points only at `file:///opt/offline-repo`, so answering "y" to ROCm runs `pacman -S rocm-*` → "target not found" → `set -e` aborts the script before Hyprland env is written. README documents ROCm as network-required, but the prompt isn't gated on offline mode.
@@ -96,7 +96,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** Both build jobs run `--privileged` containers executing repo-controlled code (package lists, `dotfiles.conf`, AUR PKGBUILDs). With no `permissions:` declared, the job gets the repo default token scope (often `contents: write`).
 - **Fix:** Set top-level `permissions: contents: read`; grant `contents: write` only to the `release` job.
 
-### M2. Offline-mode detection is inconsistent / absent across setup scripts
+### ✅ M2. Offline-mode detection is inconsistent / absent across setup scripts — FIXED (single `is_offline_mode` in the shared lib, sourced by all 7 setup scripts; see R1)
 - **Where:** installer uses filesystem presence (`hyprland-install:80-87`); GPU scripts grep pacman.conf (`nvidia-setup:58`); `bluetooth-setup`, `printer-setup`, `firewall-setup` have **no** offline detection at all
 - **Verified:** ✅
 - **What:** Half the setup scripts just call `pacman -S` and work offline only because `install_base` swapped `/mnt/etc/pacman.conf` to the offline conf. Offline behavior is implicit, not asserted, and three detection strategies can drift.
@@ -164,8 +164,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **✅ L2 (FIXED — narrowed to /tmp/archiso-out)** — CI bind-mounts host `/tmp` into the privileged container (`-v /tmp:/tmp`), widening blast radius of the injection findings. Use a container-internal path. (`build-iso.yml:155`) ☑️
 - **L3** — Personal identity baked into the ISO: `DEFAULT_USERNAME`, `GIT_USER_NAME`, `GIT_USER_EMAIL` in `install.conf`. Fine for personal use; blank or parameterize if the ISO is shared. ✅
 - **✅ L4 (FIXED — partprobe + udevadm settle + device-node wait with die on timeout)** — No `partprobe`/`udevadm settle` after partitioning; relied on a fixed `sleep 1`. ☑️
-- **L5** — NVIDIA GPU-generation detection keys off `lspci` marketing strings that are often absent; an unlabeled modern card can be misclassified as LEGACY and get the wrong driver. Consider PCI device-id ranges or defaulting present-but-unrecognized NVIDIA to `nvidia-open-dkms`. (`nvidia-setup:215`) ☑️
-- **L6** — `bluetooth-setup` `AutoEnable` edit only rewrites the commented default; the append fallback can land outside `[Policy]` where bluez ignores it. Use a section-aware edit. (`bluetooth-setup:110`) ☑️
+- **✅ L5 (FIXED — unmatched marketing strings now classify by PCI device ID: ≥0x1E00 = Turing+ → nvidia-open-dkms, else/lookup-failure → legacy)** — NVIDIA GPU-generation detection keys off `lspci` marketing strings that are often absent; an unlabeled modern card can be misclassified as LEGACY and get the wrong driver. (`nvidia-setup`) ☑️
+- **✅ L6 (FIXED — flips commented/uncommented setting in place, else inserts under `[Policy]`, else appends a new `[Policy]` section; simulated across 4 main.conf shapes)** — `bluetooth-setup` `AutoEnable` edit only rewrites the commented default; the append fallback can land outside `[Policy]` where bluez ignores it. (`bluetooth-setup`) ☑️
 - **L7** — `Installation_guide` references `w3m` which isn't installed (degrades gracefully to printing the URL). Add `w3m` or drop the branch. ✅
 - **L8** — `dotfiles-setup` has its own empty `DEFAULT_REPO=""`, a third dotfiles source of truth independent of `dotfiles.conf`/`install.conf`. ☑️
 - **Note** — The ERR trap echoes `$BASH_COMMAND` on failure; investigated as a possible password leak but bash does **not** expand variables in `$BASH_COMMAND`, so the LUKS/user passwords are not exposed. No action required; noted for future edits to that trap.
@@ -174,7 +174,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 
 ## Refactoring themes
 
-### R1. Extract a shared library for the GPU/setup scripts
+### ✅ R1. Extract a shared library for the GPU/setup scripts — DONE
+**Status:** Extracted as `/usr/local/lib/setup-common.sh` (named `setup-common`, not `gpu-setup-common`, since all 7 setup scripts source it — logging, run_cmd/pkg_install/svc_*, target_path, is_offline_mode, get_user_home/get_target_user, AUR helpers, detect_gpus + amd_is_apu, multilib/sync block, append_hyprland_env). Sourced via script-relative path with `/usr/local/lib` fallback; installer copies it alongside the scripts; `profiledef.sh` sets its perms. `hyprland-install` intentionally does NOT source it (its gum-styled `info`/`warn`/`error` would collide), so the GPU-detection regexes still exist in one extra place there.
 The three GPU scripts share ~120 lines byte-for-byte (`run_cmd`, `pkg_install`, `target_path`, `is_offline_mode`, `get_user_home`, color/logging, the multilib-enable block, the hyprland-env-append pattern), and the APU/Arc-detection regex is maintained in 3–4 places and already diverges (nvidia/amd omit `arc`, intel includes it). Extract `/usr/local/lib/gpu-setup-common.sh`, source it from all setup scripts, and add it to the installer's copy loop (`hyprland-install:1017`, which currently enumerates only the seven scripts). This also gives H5 (mkinitcpio fix) and M2 (offline detection) a single home.
 
 ### R2. Single `read_package_list()` helper
