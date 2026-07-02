@@ -25,6 +25,10 @@ on:
 env:
   ISO_NAME: ${{ github.event.inputs.iso_name || 'archlinux-custom' }}
 
+# Least privilege by default; only the release job needs write access.
+permissions:
+  contents: read
+
 jobs:
   # =============================================================================
   # Online ISO Build (Fast, smaller ISO, requires internet during installation)
@@ -40,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Initialize pacman keyring
         run: |
@@ -84,7 +88,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload ISO artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: archlinux-custom-iso-online
           path: |
@@ -146,14 +150,21 @@ jobs:
           df -h /
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Start Arch Linux container
+        # DOTFILES_REPO_INPUT is passed via env (not interpolated onto the
+        # command line) so a malicious dispatch input can't inject shell.
+        # Only the ISO output dir is shared with the host (the host-side
+        # upload-artifact step reads it); we don't expose all of /tmp.
+        env:
+          DOTFILES_REPO_INPUT: ${{ github.event.inputs.dotfiles_repo }}
         run: |
+          mkdir -p /tmp/archiso-out
           docker run -d --name archbuild --privileged \
             -v "$GITHUB_WORKSPACE:/workspace" \
-            -v "/tmp:/tmp" \
-            -e DOTFILES_REPO="${{ github.event.inputs.dotfiles_repo }}" \
+            -v "/tmp/archiso-out:/tmp/archiso-out" \
+            -e DOTFILES_REPO="$DOTFILES_REPO_INPUT" \
             -w /workspace \
             archlinux:latest sleep infinity
 
@@ -323,10 +334,16 @@ jobs:
       - name: Clone dotfiles repository (optional)
         run: |
           docker exec archbuild bash -c '
+            set -euo pipefail
             DOTFILES_REPO="${DOTFILES_REPO:-}"
 
+            # Fall back to the committed config, parsing (not sourcing) it so a
+            # crafted dotfiles.conf cannot execute shell in this container.
+            # Value must be an unquoted URL, as documented in the README.
             if [[ -z "$DOTFILES_REPO" ]] && [[ -f /workspace/archiso/dotfiles.conf ]]; then
-              source /workspace/archiso/dotfiles.conf
+              # || true: dotfiles.conf may legitimately omit/comment the key
+              # ("leave empty to skip"), and grep exits 1 on no match.
+              DOTFILES_REPO=$(grep -oP "^DOTFILES_REPO=\K.*" /workspace/archiso/dotfiles.conf | tail -1 || true)
             fi
 
             if [[ -z "$DOTFILES_REPO" ]]; then
@@ -334,8 +351,19 @@ jobs:
               exit 0
             fi
 
+            # Require a plain https:// URL. This blocks ext::/file://ssh
+            # transports and (with the -- guard below) option injection from a
+            # value beginning with -. Also reject whitespace/shell metachars.
+            case "$DOTFILES_REPO" in
+              https://*[!A-Za-z0-9._~:/?#@!$\&*+,\;=%-]*|https://)
+                echo "ERROR: DOTFILES_REPO contains invalid characters: $DOTFILES_REPO"; exit 1 ;;
+              https://*) ;;
+              *)
+                echo "ERROR: DOTFILES_REPO must be an https:// URL, got: $DOTFILES_REPO"; exit 1 ;;
+            esac
+
             echo "Cloning dotfiles from: $DOTFILES_REPO"
-            git clone --depth 1 "$DOTFILES_REPO" /workspace/archiso/airootfs/opt/dotfiles || true
+            git clone --depth 1 -- "$DOTFILES_REPO" /workspace/archiso/airootfs/opt/dotfiles
           '
 
       - name: Build ISO
@@ -377,7 +405,7 @@ jobs:
           '
 
       - name: Upload ISO artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: archlinux-custom-iso-offline
           path: |
@@ -398,16 +426,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-online, build-offline]
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
 
     steps:
       - name: Download online ISO artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: archlinux-custom-iso-online
           path: release/online
 
       - name: Download offline ISO artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: archlinux-custom-iso-offline
           path: release/offline
@@ -419,7 +449,7 @@ jobs:
           cat online/SHA512SUMS offline/SHA512SUMS > SHA512SUMS
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
           files: |
             release/online/*.iso

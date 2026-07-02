@@ -15,8 +15,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | Section | Items | Status |
 |---------|-------|--------|
 | 1. Security & profile config | C1, H1, H7, M5, M6, M11 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
-| 2. CI security | H3, H4, M1, M4, L1, L2 | ⬜ Next |
-| 3. Installer correctness | H2, M3, M8, L4 | ⬜ |
+| 2. CI security | H3, H4, M1, M4, L1, L2 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
+| 3. Installer correctness | H2, M3, M8, L4 | ⬜ Next |
 | 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ⬜ |
 | 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ⬜ |
 | Unscheduled | L3, L8, R2, R3 | ⬜ |
@@ -50,13 +50,13 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **Impact:** Hibernation silently never works; the RAM-sized swapfile is wasted effort.
 - **Fix:** Either drop the hibernate framing (and size swap smaller), or move swap creation before `configure_system`, add `resume`/`resume_offset` to `GRUB_CMDLINE_LINUX` and the `resume` hook, and regenerate initramfs + grub.cfg.
 
-### H3. CI: `dotfiles_repo` workflow input injected into a shell command line
+### ✅ H3. CI: `dotfiles_repo` workflow input injected into a shell command line — FIXED (passed via step env:)
 - **Where:** `.github/workflows/build-iso.yml:156`
 - **Verified:** ✅
 - **What:** `-e DOTFILES_REPO="${{ github.event.inputs.dotfiles_repo }}"` — `${{ }}` is expanded before the shell runs, so an input like `"; malicious #` or `$(...)` executes arbitrary commands on the runner. Restricted to write-access users, but still true script injection.
 - **Fix:** Pass via `env:` and reference `"$DOTFILES_REPO_INPUT"` in the script; never interpolate `${{ }}` directly onto a command line.
 
-### H4. CI: `dotfiles.conf` is `source`d into a root shell in a privileged container
+### ✅ H4. CI: `dotfiles.conf` is `source`d into a root shell in a privileged container — FIXED (parsed with grep, not sourced)
 - **Where:** `.github/workflows/build-iso.yml:328-329`
 - **Verified:** ✅
 - **What:** `source /workspace/archiso/dotfiles.conf` executes a checked-in file as shell as root inside the `--privileged` build container (which holds `GITHUB_TOKEN`). Reachable by any same-repo contributor via PR (the fork guard allows same-repo PRs); also breaks on any value containing spaces/`$(...)`.
@@ -90,7 +90,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 
 ## 🟡 Medium
 
-### M1. CI: no `permissions:` block — privileged build runs with default token scope
+### ✅ M1. CI: no `permissions:` block — privileged build runs with default token scope — FIXED (top-level read, release write)
 - **Where:** `.github/workflows/build-iso.yml` (top level)
 - **Verified:** ✅
 - **What:** Both build jobs run `--privileged` containers executing repo-controlled code (package lists, `dotfiles.conf`, AUR PKGBUILDs). With no `permissions:` declared, the job gets the repo default token scope (often `contents: write`).
@@ -108,7 +108,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** Doesn't strip indented comments, inline `pkg # note`, trailing whitespace, or CR (CRLF). Any such line becomes a bogus package name passed to `pacstrap`, aborting the whole base install. Other functions (`validate_offline_repo`, `install_aur_packages`) already use a robust `while read` + trim; `validate-packages.sh` parses differently again.
 - **Fix:** Extract one `read_package_list()` helper (strip `#.*`, trim whitespace/CR, drop blanks) and use it in the installer, setup scripts, and validator.
 
-### M4. CI: dotfiles clone URL unvalidated, failure silently swallowed
+### ✅ M4. CI: dotfiles clone URL unvalidated, failure silently swallowed — FIXED (https-only case check, -- guard, no || true)
 - **Where:** `.github/workflows/build-iso.yml:338` — `git clone --depth 1 "$DOTFILES_REPO" ... || true`
 - **Verified:** ☑️
 - **What:** Unvalidated URL flows to `git clone`; a value beginning with `-` or using `ext::`/`file://` transport can execute commands. `|| true` also masks a failed clone, producing a "successful" offline ISO with no dotfiles and no warning.
@@ -160,8 +160,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 
 ## ⚪ Low / Info
 
-- **L1** — CI actions pinned by mutable tag, not SHA; `softprops/action-gh-release@v1` is old and runs in the release path with `contents: write`. Pin to SHAs and bump. (`build-iso.yml`) ☑️
-- **L2** — CI bind-mounts host `/tmp` into the privileged container (`-v /tmp:/tmp`), widening blast radius of the injection findings. Use a container-internal path. (`build-iso.yml:155`) ☑️
+- **✅ L1 (FIXED)** — CI actions pinned by mutable tag, not SHA; `softprops/action-gh-release@v1` is old and runs in the release path with `contents: write`. Pin to SHAs and bump. (`build-iso.yml`) ☑️
+- **✅ L2 (FIXED — narrowed to /tmp/archiso-out)** — CI bind-mounts host `/tmp` into the privileged container (`-v /tmp:/tmp`), widening blast radius of the injection findings. Use a container-internal path. (`build-iso.yml:155`) ☑️
 - **L3** — Personal identity baked into the ISO: `DEFAULT_USERNAME`, `GIT_USER_NAME`, `GIT_USER_EMAIL` in `install.conf`. Fine for personal use; blank or parameterize if the ISO is shared. ✅
 - **L4** — No `partprobe`/`udevadm settle` after partitioning; relies on a fixed `sleep 1` (`hyprland-install:702`). Can race on slow/USB NVMe. Replace with `udevadm settle` + device-node wait. ☑️
 - **L5** — NVIDIA GPU-generation detection keys off `lspci` marketing strings that are often absent; an unlabeled modern card can be misclassified as LEGACY and get the wrong driver. Consider PCI device-id ranges or defaulting present-but-unrecognized NVIDIA to `nvidia-open-dkms`. (`nvidia-setup:215`) ☑️
