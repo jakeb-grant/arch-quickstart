@@ -19,7 +19,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | 3. Installer correctness | H2, M3, M8, L4 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
 | 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
 | 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ✅ Fixed 2026-07-02, diff-reviewed (2 agents: 1 LGTM, 1 real finding fixed + re-verified) |
-| Unscheduled | L3, L8, R3 (R2 completed with Section 5) | ⬜ |
+| Unscheduled | L8, R3 (R2 completed with Section 5; L3 closed by design — fork note added to README) | ⬜ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ⬜ |
 
 ---
@@ -163,7 +163,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 
 - **✅ L1 (FIXED)** — CI actions pinned by mutable tag, not SHA; `softprops/action-gh-release@v1` is old and runs in the release path with `contents: write`. Pin to SHAs and bump. (`build-iso.yml`) ☑️
 - **✅ L2 (FIXED — narrowed to /tmp/archiso-out)** — CI bind-mounts host `/tmp` into the privileged container (`-v /tmp:/tmp`), widening blast radius of the injection findings. Use a container-internal path. (`build-iso.yml:155`) ☑️
-- **L3** — Personal identity baked into the ISO: `DEFAULT_USERNAME`, `GIT_USER_NAME`, `GIT_USER_EMAIL` in `install.conf`. Fine for personal use; blank or parameterize if the ISO is shared. ✅
+- **✅ L3 (CLOSED — by design, 2026-07-02)** — Personal identity baked into the ISO: `DEFAULT_USERNAME`, `GIT_USER_NAME`, `GIT_USER_EMAIL` in `install.conf`. Reviewed with Jacob: values are a first name and a GitHub noreply address (no real email/PII), the dotfiles link is intentionally public, and all are just pre-filled installer prompts. README now tells forkers to swap in their own values. ✅
 - **✅ L4 (FIXED — partprobe + udevadm settle + device-node wait with die on timeout)** — No `partprobe`/`udevadm settle` after partitioning; relied on a fixed `sleep 1`. ☑️
 - **✅ L5 (FIXED — unmatched marketing strings now classify by PCI device ID: ≥0x1E00 = Turing+ → nvidia-open-dkms, else/lookup-failure → legacy)** — NVIDIA GPU-generation detection keys off `lspci` marketing strings that are often absent; an unlabeled modern card can be misclassified as LEGACY and get the wrong driver. (`nvidia-setup`) ☑️
 - **✅ L6 (FIXED — flips commented/uncommented setting in place, else inserts under `[Policy]`, else appends a new `[Policy]` section; simulated across 4 main.conf shapes)** — `bluetooth-setup` `AutoEnable` edit only rewrites the commented default; the append fallback can land outside `[Policy]` where bluez ignores it. (`bluetooth-setup`) ☑️

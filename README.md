@@ -222,6 +222,8 @@ DEFAULT_FONT="ter-116n"
 DEFAULT_SHELL="/bin/bash"
 ```
 
+These are only pre-filled defaults for the installer prompts—every one can be changed at install time. **Forking this repo?** Swap in your own values here (the username/name/email above are the author's) and point `dotfiles.conf` below at your own dotfiles repo.
+
 ### `dotfiles.conf` - Offline Dotfiles
 
 ```bash
