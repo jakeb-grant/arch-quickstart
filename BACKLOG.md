@@ -16,8 +16,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 |---------|-------|--------|
 | 1. Security & profile config | C1, H1, H7, M5, M6, M11 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
 | 2. CI security | H3, H4, M1, M4, L1, L2 | ✅ Fixed 2026-07-02, diff-reviewed (LGTM) |
-| 3. Installer correctness | H2, M3, M8, L4 | ⬜ Next |
-| 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ⬜ |
+| 3. Installer correctness | H2, M3, M8, L4 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
+| 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ⬜ Next |
 | 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ⬜ |
 | Unscheduled | L3, L8, R2, R3 | ⬜ |
 
@@ -43,7 +43,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** `sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /mnt/etc/sudoers` matches the stock line exactly and is not checked for success. If the sudoers layout ever differs by a character, the edit no-ops, `sed` still exits 0, and — because root has no password — the machine has no way to escalate privileges.
 - **Fix:** Write a validated drop-in instead: `echo '%wheel ALL=(ALL:ALL) ALL' > /mnt/etc/sudoers.d/10-wheel && chmod 440 /mnt/etc/sudoers.d/10-wheel`, then `arch-chroot /mnt visudo -cf /etc/sudoers.d/10-wheel`.
 
-### H2. Hibernation is advertised and sized for, but never actually configured
+### ✅ H2. Hibernation is advertised and sized for, but never actually configured — FIXED (resume hook + resume=/resume_offset= via map-swapfile; configure_swap now runs before configure_system)
 - **Where:** `hyprland-install:1032-1083` (`configure_swap`), called at `:1483` — **after** `configure_system` at `:1482` already ran `mkinitcpio -P` (`:952`) and `grub-mkconfig` (`:958`)
 - **Verified:** ✅
 - **What:** Swap is sized to RAM "for hibernation," but nothing sets `resume=`/`resume_offset=` kernel params, adds the `resume` mkinitcpio hook, or computes the swapfile physical offset. Even if it did, it runs after the initramfs and grub.cfg were already generated.
@@ -102,7 +102,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** Half the setup scripts just call `pacman -S` and work offline only because `install_base` swapped `/mnt/etc/pacman.conf` to the offline conf. Offline behavior is implicit, not asserted, and three detection strategies can drift.
 - **Fix:** Extract one `is_offline_mode` helper into a shared library and source it everywhere (see R1).
 
-### M3. `install_base` package-list parsing is weaker than the rest of the codebase
+### ✅ M3. `install_base` package-list parsing is weaker than the rest of the codebase — FIXED (read_package_list() helper, used at all 5 installer parse sites)
 - **Where:** `hyprland-install:824` — `grep -v '^#' | grep -v '^$'`
 - **Verified:** ✅
 - **What:** Doesn't strip indented comments, inline `pkg # note`, trailing whitespace, or CR (CRLF). Any such line becomes a bogus package name passed to `pacstrap`, aborting the whole base install. Other functions (`validate_offline_repo`, `install_aur_packages`) already use a robust `while read` + trim; `validate-packages.sh` parses differently again.
@@ -132,7 +132,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **What:** The installed desktop boots into Hyprland with no bar, no launcher, and no shell process, while docs and the finish screen promise a launcher keybind and "full desktop (with quickshell)." (May be intentional if dotfiles supply this — needs a decision.)
 - **Fix:** Either autostart quickshell/a bar and ship a launcher, or correct the README + finish-screen text to match what actually ships.
 
-### M8. `install.conf` defaults are duplicated as hardcoded fallbacks that disagree
+### ✅ M8. `install.conf` defaults are duplicated as hardcoded fallbacks that disagree — FIXED (DEFAULT_SHELL fallback now /bin/bash, matching install.conf)
 - **Where:** `install.conf:19` `DEFAULT_SHELL="/bin/bash"` vs `hyprland-install:38` `DEFAULT_SHELL="${DEFAULT_SHELL:-/bin/zsh}"`
 - **Verified:** ✅
 - **What:** If `install.conf` is ever missing/unreadable the shell silently flips to `/bin/zsh` (which isn't installed), contradicting the documented default. Same duplicated-fallback pattern for other defaults.
@@ -163,7 +163,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **✅ L1 (FIXED)** — CI actions pinned by mutable tag, not SHA; `softprops/action-gh-release@v1` is old and runs in the release path with `contents: write`. Pin to SHAs and bump. (`build-iso.yml`) ☑️
 - **✅ L2 (FIXED — narrowed to /tmp/archiso-out)** — CI bind-mounts host `/tmp` into the privileged container (`-v /tmp:/tmp`), widening blast radius of the injection findings. Use a container-internal path. (`build-iso.yml:155`) ☑️
 - **L3** — Personal identity baked into the ISO: `DEFAULT_USERNAME`, `GIT_USER_NAME`, `GIT_USER_EMAIL` in `install.conf`. Fine for personal use; blank or parameterize if the ISO is shared. ✅
-- **L4** — No `partprobe`/`udevadm settle` after partitioning; relies on a fixed `sleep 1` (`hyprland-install:702`). Can race on slow/USB NVMe. Replace with `udevadm settle` + device-node wait. ☑️
+- **✅ L4 (FIXED — partprobe + udevadm settle + device-node wait with die on timeout)** — No `partprobe`/`udevadm settle` after partitioning; relied on a fixed `sleep 1`. ☑️
 - **L5** — NVIDIA GPU-generation detection keys off `lspci` marketing strings that are often absent; an unlabeled modern card can be misclassified as LEGACY and get the wrong driver. Consider PCI device-id ranges or defaulting present-but-unrecognized NVIDIA to `nvidia-open-dkms`. (`nvidia-setup:215`) ☑️
 - **L6** — `bluetooth-setup` `AutoEnable` edit only rewrites the commented default; the append fallback can land outside `[Policy]` where bluez ignores it. Use a section-aware edit. (`bluetooth-setup:110`) ☑️
 - **L7** — `Installation_guide` references `w3m` which isn't installed (degrades gracefully to printing the URL). Add `w3m` or drop the branch. ✅
@@ -179,6 +179,7 @@ The three GPU scripts share ~120 lines byte-for-byte (`run_cmd`, `pkg_install`, 
 
 ### R2. Single `read_package_list()` helper
 Package-list parsing exists in at least three forms (robust `while read` in the installer's AUR/offline paths, weak `grep` in `install_base`, a third variant in `validate-packages.sh`). Unify them so the installer, setup scripts, and validator agree on comments/whitespace/CR handling (fixes M3, reduces M10 risk).
+**Status:** installer side done with M3 (one helper, all 5 sites). Remaining: `validate-packages.sh` (fold into Section 5 / M10) and any setup-script parse sites (Section 4 / R1).
 
 ### R3. Decompose the 1,490-line installer monolith
 Error handling leans entirely on a global `set -e` + ERR trap that pauses on `read`, which is fragile for a disk-wiping installer; several `|| true` calls mask failures. Consider explicit success checks + cleanup around the destructive steps (pacstrap, mkfs, cryptsetup, grub-install) and splitting into sourced modules. Lower priority than the correctness fixes above.

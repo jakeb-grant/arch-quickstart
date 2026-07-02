@@ -25,6 +25,10 @@ CONFIG_FILE="/root/install.conf"
 OFFLINE_REPO="/opt/offline-repo"
 OFFLINE_MODE=0
 
+# Physical offset of the swapfile, set by configure_swap and consumed by
+# configure_system for the resume= / resume_offset= kernel parameters
+RESUME_OFFSET=""
+
 # Load configuration defaults
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -35,7 +39,7 @@ DEFAULT_USERNAME="${DEFAULT_USERNAME:-user}"
 DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-America/Denver}"
 DEFAULT_LOCALE="${DEFAULT_LOCALE:-en_US.UTF-8}"
 DEFAULT_KEYMAP="${DEFAULT_KEYMAP:-us}"
-DEFAULT_SHELL="${DEFAULT_SHELL:-/bin/zsh}"
+DEFAULT_SHELL="${DEFAULT_SHELL:-/bin/bash}"
 GIT_USER_NAME="${GIT_USER_NAME:-}"
 GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
 
@@ -71,6 +75,21 @@ header() {
         --bold \
         "Hyprland Arch Installer"
     echo
+}
+
+# Parse a package list file: strip comments (# to end of line), trim
+# whitespace and CR, drop blank lines. One package name per output line.
+read_package_list() {
+    local file="$1" line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line//$'\r'/}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        if [[ -n "$line" ]]; then
+            printf '%s\n' "$line"
+        fi
+    done < "$file"
 }
 
 # -----------------------------------------------------------------------------
@@ -121,40 +140,16 @@ validate_offline_repo() {
         return 0
     fi
 
-    # Check target packages
-    if [[ -f "$PACKAGES_FILE" ]]; then
-        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
-            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "${pkg// }" ]] && continue
+    # Check target, AUR, and setup-script package lists against the repo
+    local list_file
+    for list_file in "$PACKAGES_FILE" /root/aur-packages.x86_64 /root/setup-packages.x86_64; do
+        [[ -f "$list_file" ]] || continue
+        while IFS= read -r pkg; do
             if ! echo "$available_packages" | grep -qx "$pkg"; then
                 missing_packages+=("$pkg")
             fi
-        done < "$PACKAGES_FILE"
-    fi
-
-    # Check AUR packages
-    local aur_packages_file="/root/aur-packages.x86_64"
-    if [[ -f "$aur_packages_file" ]]; then
-        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
-            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "${pkg// }" ]] && continue
-            if ! echo "$available_packages" | grep -qx "$pkg"; then
-                missing_packages+=("$pkg")
-            fi
-        done < "$aur_packages_file"
-    fi
-
-    # Check setup script packages (GPU drivers, printer, firewall, etc.)
-    local setup_packages_file="/root/setup-packages.x86_64"
-    if [[ -f "$setup_packages_file" ]]; then
-        while IFS= read -r pkg || [[ -n "$pkg" ]]; do
-            [[ "$pkg" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "${pkg// }" ]] && continue
-            if ! echo "$available_packages" | grep -qx "$pkg"; then
-                missing_packages+=("$pkg")
-            fi
-        done < "$setup_packages_file"
-    fi
+        done < <(read_package_list "$list_file")
+    done
 
     # Report results
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
@@ -699,7 +694,9 @@ partition_disk() {
     gum spin --spinner dot --title "Creating root partition..." -- \
         parted -s "$DISK" mkpart primary btrfs 513MiB 100%
 
-    sleep 1  # Wait for kernel to update partition table
+    # Wait for the kernel to pick up the new partition table
+    partprobe "$DISK" 2>/dev/null || true
+    udevadm settle
 
     # Determine partition names (handle nvme vs sd naming)
     if [[ "$DISK" == *"nvme"* ]]; then
@@ -708,6 +705,16 @@ partition_disk() {
     else
         EFI_PART="${DISK}1"
         ROOT_PART="${DISK}2"
+    fi
+
+    # Device nodes can lag on slow USB/NVMe controllers even after settle
+    local _i
+    for _i in {1..20}; do
+        [[ -b "$EFI_PART" && -b "$ROOT_PART" ]] && break
+        sleep 0.5
+    done
+    if [[ ! -b "$EFI_PART" || ! -b "$ROOT_PART" ]]; then
+        die "Partition device nodes did not appear: $EFI_PART $ROOT_PART"
     fi
 
     success "Partitioning complete!"
@@ -821,7 +828,7 @@ install_base() {
 
     # Read packages from file
     if [[ -f "$PACKAGES_FILE" ]]; then
-        mapfile -t packages < <(grep -v '^#' "$PACKAGES_FILE" | grep -v '^$')
+        mapfile -t packages < <(read_package_list "$PACKAGES_FILE")
     else
         # Fallback to essential packages if file not found
         packages=(base linux linux-firmware grub efibootmgr iwd)
@@ -937,24 +944,42 @@ EOF
     chmod 440 /mnt/etc/sudoers.d/10-wheel
     arch-chroot /mnt visudo -cf /etc/sudoers.d/10-wheel
 
-    # Configure encryption if enabled
-    if [[ "$ENCRYPT_DISK" == "yes" ]]; then
-        info "  Configuring disk encryption..."
+    # Configure initramfs hooks and kernel command line.
+    # The resume hook + resume=/resume_offset= parameters enable hibernation
+    # into the swapfile created by configure_swap (which runs before this).
+    info "  Configuring initramfs and kernel parameters..."
+    local kernel_params=""
+    local resume_device=""
 
+    if [[ "$ENCRYPT_DISK" == "yes" ]]; then
         # Get UUID of the encrypted partition
         local crypt_uuid
         crypt_uuid=$(blkid -s UUID -o value "$ROOT_PART")
 
-        # Add encrypt hook to mkinitcpio
-        sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+        sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt resume filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+        kernel_params="cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot"
+        # The swapfile lives on the btrfs inside the LUKS container, which the
+        # encrypt hook has already opened by the time resume runs
+        resume_device="/dev/mapper/cryptroot"
+    else
+        local root_uuid
+        root_uuid=$(blkid -s UUID -o value "$ROOT_PART")
 
-        # Configure GRUB for encrypted root
-        sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot\"|" /mnt/etc/default/grub
-
-        # Regenerate initramfs
-        info "  Regenerating initramfs..."
-        arch-chroot /mnt mkinitcpio -P
+        sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block resume filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+        resume_device="UUID=$root_uuid"
     fi
+
+    if [[ -n "$RESUME_OFFSET" ]]; then
+        kernel_params="${kernel_params:+$kernel_params }resume=$resume_device resume_offset=$RESUME_OFFSET"
+    fi
+
+    if [[ -n "$kernel_params" ]]; then
+        sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"$kernel_params\"|" /mnt/etc/default/grub
+    fi
+
+    # Regenerate initramfs with the updated hooks
+    info "  Regenerating initramfs..."
+    arch-chroot /mnt mkinitcpio -P
 
     # Install bootloader
     info "  Installing GRUB bootloader..."
@@ -1078,6 +1103,15 @@ configure_swap() {
     info "  Formatting swap file..."
     mkswap /mnt/swap/swapfile
 
+    # Compute the swapfile's physical offset for hibernation resume.
+    # configure_system uses it for the resume_offset= kernel parameter.
+    info "  Computing hibernation resume offset..."
+    if ! RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /mnt/swap/swapfile) \
+        || [[ ! "$RESUME_OFFSET" =~ ^[0-9]+$ ]]; then
+        RESUME_OFFSET=""
+        warn "  Could not determine swapfile offset - hibernation will not be enabled"
+    fi
+
     # Add to fstab
     info "  Adding swap to fstab..."
     echo "/swap/swapfile none swap defaults 0 0" >> /mnt/etc/fstab
@@ -1193,12 +1227,7 @@ install_aur_packages() {
         return 0
     fi
 
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # Skip comments and blank lines
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// }" ]] && continue
-        aur_packages+=("$line")
-    done < "$aur_packages_file"
+    mapfile -t aur_packages < <(read_package_list "$aur_packages_file")
 
     if [[ ${#aur_packages[@]} -eq 0 ]]; then
         info "No AUR packages to install"
@@ -1483,8 +1512,10 @@ main() {
     format_partitions
     mount_partitions
     install_base
-    configure_system
+    # Swap must exist before configure_system generates the initramfs and
+    # grub.cfg, which bake in the hibernation resume offset
     configure_swap
+    configure_system
     install_extras
     install_aur_packages
     setup_dotfiles
