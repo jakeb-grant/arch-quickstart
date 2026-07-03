@@ -278,7 +278,9 @@ validate_offline_repo() {
 
     # Extract package names from the database by reading %NAME% fields from desc files
     # This is more reliable than parsing directory names which fail for packages with hyphens
-    available_packages=$(tar --wildcards -xf "$db_file" -O '*/desc' 2>/dev/null | awk '/^%NAME%$/{getline; print}')
+    # || true: with pipefail a tar failure would fire the ERR trap before the
+    # empty-check below could take its graceful "skip validation" path
+    available_packages=$(tar --wildcards -xf "$db_file" -O '*/desc' 2>/dev/null | awk '/^%NAME%$/{getline; print}' || true)
 
     if [[ -z "$available_packages" ]]; then
         warn "Could not read offline repository database"
@@ -417,7 +419,9 @@ connect_wifi() {
 
     # Get WiFi interface name
     local wifi_device
-    wifi_device=$(iwctl device list 2>/dev/null | awk '/station/{print $2}' | head -1)
+    # || true: an iwctl failure should reach the "No WiFi device found" die
+    # below, not the ERR trap
+    wifi_device=$(iwctl device list 2>/dev/null | awk '/station/{print $2}' | head -1 || true)
 
     if [[ -z "$wifi_device" ]]; then
         die "No WiFi device found!"
@@ -432,6 +436,8 @@ connect_wifi() {
     #   [marker/spaces ~6 chars][SSID 32 chars][Security ~18 chars][Signal]
     # We strip ANSI codes, extract the SSID column (chars 7-38), and trim whitespace
     local networks
+    # || true on both: an iwctl failure should reach the rescan / "No WiFi
+    # networks found" fallbacks below, not the ERR trap
     networks=$(iwctl station "$wifi_device" get-networks 2>/dev/null | \
         tail -n +5 | \
         sed 's/\x1b\[[0-9;]*m//g' | \
@@ -439,7 +445,7 @@ connect_wifi() {
             ssid = substr($0, 7, 32)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", ssid)
             if (ssid != "") print ssid
-        }' | sort -u)
+        }' | sort -u || true)
 
     if [[ -z "$networks" ]]; then
         warn "No WiFi networks found. Rescanning..."
@@ -452,7 +458,7 @@ connect_wifi() {
                 ssid = substr($0, 7, 32)
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", ssid)
                 if (ssid != "") print ssid
-            }' | sort -u)
+            }' | sort -u || true)
     fi
 
     if [[ -z "$networks" ]]; then
@@ -839,19 +845,19 @@ partition_disk() {
     # Point of no return: enable cleanup-on-failure from here on
     DISK_TOUCHED=1
 
-    gum spin --spinner dot --title "Wiping disk..." -- \
+    gum spin --show-error --spinner dot --title "Wiping disk..." -- \
         wipefs -af "$DISK"
 
-    gum spin --spinner dot --title "Creating partition table..." -- \
+    gum spin --show-error --spinner dot --title "Creating partition table..." -- \
         parted -s "$DISK" mklabel gpt
 
-    gum spin --spinner dot --title "Creating EFI partition (512MB)..." -- \
+    gum spin --show-error --spinner dot --title "Creating EFI partition (512MB)..." -- \
         parted -s "$DISK" mkpart primary fat32 1MiB 513MiB
 
-    gum spin --spinner dot --title "Setting EFI flags..." -- \
+    gum spin --show-error --spinner dot --title "Setting EFI flags..." -- \
         parted -s "$DISK" set 1 esp on
 
-    gum spin --spinner dot --title "Creating root partition..." -- \
+    gum spin --show-error --spinner dot --title "Creating root partition..." -- \
         parted -s "$DISK" mkpart primary btrfs 513MiB 100%
 
     # Wait for the kernel to pick up the new partition table
@@ -894,6 +900,8 @@ format_partitions() {
 
     info "Formatting EFI partition (FAT32)..."
     mkfs.fat -F32 "$EFI_PART"
+    [[ "$(blkid -s TYPE -o value "$EFI_PART")" == "vfat" ]] \
+        || die "EFI partition did not format as FAT32"
 
     if [[ "$ENCRYPT_DISK" == "yes" ]]; then
         info "Setting up LUKS encryption..."
@@ -901,15 +909,21 @@ format_partitions() {
 
         info "Opening encrypted container..."
         echo -n "$ENCRYPT_PASSWORD" | cryptsetup open "$ROOT_PART" cryptroot -
+        [[ -b /dev/mapper/cryptroot ]] \
+            || die "LUKS container did not appear at /dev/mapper/cryptroot"
 
         # Store the mapper device for later use
         CRYPT_DEVICE="/dev/mapper/cryptroot"
 
         info "Formatting encrypted partition (BTRFS)..."
         mkfs.btrfs -f "$CRYPT_DEVICE"
+        [[ "$(blkid -s TYPE -o value "$CRYPT_DEVICE")" == "btrfs" ]] \
+            || die "Encrypted root did not format as BTRFS"
     else
         info "Formatting root partition (BTRFS)..."
         mkfs.btrfs -f "$ROOT_PART"
+        [[ "$(blkid -s TYPE -o value "$ROOT_PART")" == "btrfs" ]] \
+            || die "Root partition did not format as BTRFS"
         CRYPT_DEVICE=""
     fi
 
@@ -1120,6 +1134,10 @@ EOF
         crypt_uuid=$(blkid -s UUID -o value "$ROOT_PART")
 
         sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt resume filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+        # sed exits 0 even when nothing matched - and a missing encrypt hook
+        # means an unbootable system reported as success
+        grep -q '^HOOKS=.*encrypt' /mnt/etc/mkinitcpio.conf \
+            || die "Failed to set the encrypt hook in mkinitcpio.conf"
         kernel_params="cryptdevice=UUID=$crypt_uuid:cryptroot root=/dev/mapper/cryptroot"
         # The swapfile lives on the btrfs inside the LUKS container, which the
         # encrypt hook has already opened by the time resume runs
@@ -1129,6 +1147,8 @@ EOF
         root_uuid=$(blkid -s UUID -o value "$ROOT_PART")
 
         sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block resume filesystems fsck)/' /mnt/etc/mkinitcpio.conf
+        grep -q '^HOOKS=.*resume' /mnt/etc/mkinitcpio.conf \
+            || die "Failed to set initramfs hooks in mkinitcpio.conf"
         resume_device="UUID=$root_uuid"
     fi
 
@@ -1138,6 +1158,8 @@ EOF
 
     if [[ -n "$kernel_params" ]]; then
         sed -i "s|^GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"$kernel_params\"|" /mnt/etc/default/grub
+        grep -qF "GRUB_CMDLINE_LINUX=\"$kernel_params\"" /mnt/etc/default/grub \
+            || die "Failed to set kernel parameters in /etc/default/grub"
     fi
 
     # Regenerate initramfs with the updated hooks
@@ -1148,6 +1170,9 @@ EOF
     info "  Installing GRUB bootloader..."
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
     arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+    # Exit 0 from grub tools isn't proof the artifacts landed
+    [[ -s /mnt/boot/EFI/GRUB/grubx64.efi && -s /mnt/boot/grub/grub.cfg ]] \
+        || die "GRUB did not produce a bootable configuration in /boot"
 
     # Enable services
     info "  Enabling services..."
@@ -1188,7 +1213,8 @@ PAMEOF
     chmod 644 /mnt/etc/pam.d/greetd
 
     # Ensure greeter user can access greetd
-    arch-chroot /mnt usermod -aG video greeter 2>/dev/null || true
+    arch-chroot /mnt usermod -aG video greeter 2>/dev/null \
+        || warn "  Could not add greeter user to video group"
 
     # Configure iwd with systemd-resolved
     info "  Configuring iwd..."
@@ -1622,7 +1648,10 @@ PACMANCONF
         # Sync package databases in the installed system (if network available)
         if test_network; then
             info "Syncing package databases..."
-            arch-chroot /mnt pacman -Sy --noconfirm
+            # The system is fully installed - a mirror hiccup here must not
+            # abort the installer as a failure
+            arch-chroot /mnt pacman -Sy --noconfirm \
+                || warn "Could not sync package databases - run 'pacman -Syu' after reboot"
         else
             info "No network - package databases will sync on first online update"
         fi
@@ -1676,14 +1705,16 @@ PACMANCONF
 # -----------------------------------------------------------------------------
 
 main() {
+    # Check for required tools first: die() itself renders with gum, so this
+    # check must come before anything that could call die, and use plain echo
+    if ! command -v gum &>/dev/null; then
+        echo "ERROR: gum is not installed!" >&2
+        exit 1
+    fi
+
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
         die "This script must be run as root!"
-    fi
-
-    # Check for required tools
-    if ! command -v gum &>/dev/null; then
-        die "gum is not installed!"
     fi
 
     # Detect if offline repository is available
