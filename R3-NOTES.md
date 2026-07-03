@@ -285,12 +285,50 @@ transiently hold the dm node during `cryptsetup close` (hence the retry ×3 +
 `udevadm settle`); a held partition blocks partition-table re-read on re-run
 (moot given the pre-flight).
 
+## Implementation log (2026-07-02)
+
+All sections implemented per plan, each validated by lint at CI severity
+(`shellcheck --severity=warning -x` + `bash -n`), scenario harnesses run
+against the real code (scratchpad `s1/s2/s4-harness.sh` — paths rewritten
+mechanically for rootless testing, commands stubbed), and per-section agent
+review. Deviations from / additions to the planned design, all review-driven:
+
+- **S1 (`09463c4`)**: teardown extracted as `teardown_target()` (subshell
+  body, so `set +e`/trap changes can't leak) shared by `cleanup_on_failure`
+  and the pre-flight — the pre-flight originally lacked the gpgconf/fuser/
+  settle mitigations it needs. Exit pause moved from the ERR trap into
+  `on_exit` AFTER cleanup (power-cycle at the prompt now still leaves a clean
+  machine); pause skipped for rc 130/143. `trap '' INT TERM` during teardown
+  (Ctrl-C must not abort it partway). `DISK_TOUCHED=0` before the success-path
+  `reboot` (shutdown's SIGTERM must not fire cleanup). TERM exits 143, INT 130.
+  10-scenario harness.
+- **S2 (`845dd55`)**: wrappers `prompt_input/prompt_choose/prompt_filter`
+  (VAR-name first; gum in condition context; `printf -v` assignment works for
+  callers' locals via dynamic scoping) + `confirm()` (130 → `cancelled()`).
+  Choose/filter items fed via `< <(...)` NOT pipes — a piped wrapper would run
+  in a subshell and its `exit 130` couldn't leave the installer. Post-install
+  dotfiles prompt degrades to skip, not cancel. 7-scenario harness; review
+  LGTM (one comment fix: Esc at confirm is 130 on newer gum).
+- **S3 (`d4d9c7a`)**: all planned checks landed; reviewer verified blkid
+  returns exactly `vfat`/`btrfs`, `cryptsetup open` blocks on the udev cookie
+  (no node race), `/mnt/boot/EFI/GRUB/grubx64.efi` is the exact artifact path,
+  and the grep anchors can't false-positive on stock configs. Extra fix from
+  review: gum-missing check moved BEFORE the root check in `main()` (the root
+  check dies via gum). `--show-error` added to the five destructive `gum spin`
+  sites. The `|| true` fallback revivals also fix a latent `head -1` SIGPIPE
+  spurious-ERR in the wifi_device pipeline.
+- **S4**: boot-medium exclusion walks `lsblk -no PKNAME` up the chain
+  (handles Ventoy dm → partition → disk), fails open; disk regex tightened
+  with a `[[:space:]]` anchor (adds `mmcblk`, excludes `mmcblkXboot0`); note
+  printed when a disk is withheld. 5-scenario harness.
+
 ## Status
 
 - [x] State-lifecycle review incorporated
 - [x] Exit-semantics review incorporated
-- [ ] Section 1 — cleanup infrastructure
-- [ ] Section 2 — cancel handling
-- [ ] Section 3 — post-step verification
-- [ ] Section 4 — exclude live-boot device from disk list
+- [x] Section 1 — cleanup infrastructure (`09463c4`)
+- [x] Section 2 — cancel handling (`845dd55`)
+- [x] Section 3 — post-step verification (`d4d9c7a`)
+- [ ] Section 4 — exclude live-boot device (built + harness-passed; agent
+      review in flight, commit pending)
 - [ ] BACKLOG.md R3 entry closed; this doc folded/removed
