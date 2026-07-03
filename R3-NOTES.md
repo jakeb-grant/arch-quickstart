@@ -246,6 +246,45 @@ stays live), 1124's `if !` guard is correct, the AURSCRIPT heredoc's inner
 `set -e` propagates, arithmetic contexts safe, and `gum spin` propagates exit
 codes (the wipefs/parted chain does abort on failure).
 
+### Verification of findings (independent, 2026-07-02)
+
+Empirical sandbox tests (`scratchpad/verify-r3-findings.sh`, all passed):
+
+- ERR trap fires inside `$( )`/`<( )` subshells and its stdout is captured,
+  not shown; procsub failure feeds the trap's own text into `mapfile` as
+  array elements while the parent continues (**confirms exit #1/#2**); the
+  `>&2` fix keeps the array clean so the empty-list guard works.
+- Plain `exit 1` does not fire ERR; an EXIT trap gated on non-zero `$?` does
+  (**confirms the die() gap + the EXIT-trap design**).
+- pipefail + assignment fires the trap before `[[ -z ]]` fallbacks run;
+  `|| true` inside the substitution revives them (**confirms exit #4**).
+- `sed -i` no-match exits 0 silently (**confirms exit #3**).
+- `[[ ]] && cmd` mid-function safe / at function tail fatal under set -e
+  (**confirms the semantics note**).
+
+Source/document checks:
+
+- `man umount` (util-linux 2.42.2): `-R` "recursion … will stop if any
+  unmount operation in the chain fails for any reason" (**confirms lifecycle
+  ordering point**).
+- arch-install-scripts upstream (GitHub mirror): `pacman-key --gpgdir
+  "$newroot"/etc/pacman.d/gnupg --init` runs on the host; no `gpgconf --kill`
+  anywhere (**confirms the gpg-agent /mnt-pinning risk**);
+  `pid_unshare="unshare --fork --pid"` wraps arch-chroot/pacman and
+  `trap 'chroot_teardown' EXIT` unmounts the API mounts (**confirms
+  chroot-daemon safety**).
+- gum source (`spin/command.go`): spin returns the wrapped command's exit
+  status (**confirms the "cleared" wipefs/parted claim**). Nuance: without
+  `--show-error` the failing command's output is hidden — consider adding
+  `--show-error` to the spin-wrapped destructive steps in Section 3.
+- Repo boot configs: copytoram is boot entry 03 in grub/efiboot/syslinux,
+  not the default (**confirms Section 4's live-USB wipe risk**).
+
+Not directly testable here, adopted as harmless design guidance: udev can
+transiently hold the dm node during `cryptsetup close` (hence the retry ×3 +
+`udevadm settle`); a held partition blocks partition-table re-read on re-run
+(moot given the pre-flight).
+
 ## Status
 
 - [x] State-lifecycle review incorporated
