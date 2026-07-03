@@ -535,12 +535,35 @@ select_disk() {
     info "Scanning for available disks..."
     echo
 
-    # Get list of disks (exclude loop devices and rom)
+    # Never offer the device the live ISO booted from: unless copytoram was
+    # used, wiping it destroys the running live system mid-install
+    local boot_disk="" boot_src parent
+    boot_src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+    if [[ -n "$boot_src" ]]; then
+        # Inverse tree (-s), raw list (-r): the last line is the topmost
+        # ancestor, i.e. the whole disk - works for a partition, a
+        # Ventoy-style dm chain, and the disk itself. Fails open: no
+        # resolution, no exclusion.
+        parent=$(lsblk -srno NAME "$boot_src" 2>/dev/null | tail -1 || true)
+        [[ -n "$parent" ]] && boot_disk="/dev/$parent"
+    fi
+
+    # Get list of disks (exclude loop devices, rom, eMMC boot partitions,
+    # and the boot medium)
     local disks
-    mapfile -t disks < <(lsblk -dpno NAME,SIZE,MODEL | grep -E '^/dev/(sd|nvme|vd)' | sort)
+    mapfile -t disks < <(lsblk -dpno NAME,SIZE,MODEL \
+        | grep -E '^/dev/(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|mmcblk[0-9]+)[[:space:]]' \
+        | awk -v skip="$boot_disk" '$1 != skip' \
+        | sort || true)
 
     if [[ ${#disks[@]} -eq 0 ]]; then
         die "No suitable disks found!"
+    fi
+    # Only mention the exclusion when the boot medium would otherwise have
+    # been offered (not e.g. an optical drive the regex never lists)
+    if [[ "$boot_disk" =~ ^/dev/(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|mmcblk[0-9]+)$ ]]; then
+        info "(not listing $boot_disk - it is the installer boot medium)"
+        echo
     fi
 
     gum style --foreground="#cba6f7" "Select the target disk for installation:"
