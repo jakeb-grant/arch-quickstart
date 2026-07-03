@@ -22,6 +22,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | Unscheduled | R3 fixed 2026-07-02 as installer hardening in 4 reviewed sections — see R3 entry below (L8 fixed 2026-07-02 — dotfiles.conf moved into airootfs/etc as single source of truth; R2 completed with Section 5; L3 closed by design — fork note added to README) | ✅ |
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
+| VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | 🔲 Open |
 
 ---
 
@@ -183,6 +184,47 @@ The three GPU scripts share ~120 lines byte-for-byte (`run_cmd`, `pkg_install`, 
 ### R2. Single `read_package_list()` helper
 Package-list parsing exists in at least three forms (robust `while read` in the installer's AUR/offline paths, weak `grep` in `install_base`, a third variant in `validate-packages.sh`). Unify them so the installer, setup scripts, and validator agree on comments/whitespace/CR handling (fixes M3, reduces M10 risk).
 **Status:** ✅ DONE. Installer side with M3 (one helper, all 5 sites); `validate-packages.sh` now carries a byte-identical copy of the helper (Section 5 / M10); setup scripts have no list-parse sites (Section 4 / R1). Note: the workflow's inline `mapfile < <(grep -v ...)` sites in build-iso.yml still use the weak parse, but every list they read is pre-validated by the rewritten validator in the same run.
+
+## VM acceptance test findings (2026-07-03)
+
+First real install test: QEMU/OVMF VM, online ISO built by CI run 28639461352.
+The install itself passed end-to-end (encrypted LUKS install → bootable
+system), and the R3 hardening proved out on real failures (ERR trap with exact
+line/command, full teardown, clean re-run over a dirty disk, clean no-network
+exit). Three fixes fell out — full evidence and per-item plans in
+`VM-TEST-NOTES.md`.
+
+### V1. 🟠 GPU detection regex false-positive — every machine "detects" AMD
+- **Where:** `hyprland-install:733` + `setup-common.sh:166` (`detect_gpus`)
+- **Verified:** ✅ (observed in VM; reproduced by hand)
+- **What:** `grep -iE 'amd|radeon|ati'` matches "comp**ati**ble" in "VGA
+  compatible controller" — present in ~every lspci GPU line — so
+  `DETECTED_AMD` is always set (VM showed a virtio GPU as "AMD … (discrete)").
+- **Fix:** word boundaries — `grep -iE '\b(amd|radeon|ati)\b'` at both sites.
+
+### V2. 🟡 GRUB registered via NVRAM entry only — no fallback loader
+- **Where:** `hyprland-install:1198` (single `grub-install --bootloader-id=GRUB`)
+- **Verified:** ✅ (failure mode observed in VM when NVRAM entries broke)
+- **What:** if the NVRAM entry is lost/invalidated (CMOS reset, board swap,
+  disk moved, firmware update), firmware finds nothing at the UEFI default
+  path and falls to PXE on a bootable disk.
+- **Fix:** second `grub-install … --removable` pass (installs
+  `EFI/BOOT/BOOTX64.EFI`, no NVRAM write) + extend the :1201 verification.
+
+### V3. 🟠 Online AUR failure tears down a finished, bootable system
+- **Where:** `hyprland-install:1494-1532` (online path) + `configure_swap`
+- **Verified:** ✅ (happened on test run #1: two `-git` builds OOM-killed at
+  4 GB RAM → set -e → ERR trap → full teardown of a complete base system)
+- **What:** AUR runs after GRUB, so the disk is already bootable; the offline
+  path already warns-and-continues per package, the online path is
+  all-or-nothing. Underlying build failure was OOM — the RAM-sized target
+  swapfile exists by then but is never `swapon`'d during install.
+- **Fix:** (a) per-package tolerance in the online path mirroring offline
+  semantics; (b) `swapon` target swapfile after mkswap + `swapoff` in
+  `finish()` and `teardown_target()`; (c) Jacob decides failure severity
+  policy (recommended: never fatal, matching offline).
+
+---
 
 ### R3. Decompose the 1,490-line installer monolith
 Error handling leans entirely on a global `set -e` + ERR trap that pauses on `read`, which is fragile for a disk-wiping installer; several `|| true` calls mask failures. Consider explicit success checks + cleanup around the destructive steps (pacstrap, mkfs, cryptsetup, grub-install) and splitting into sourced modules. Lower priority than the correctness fixes above.
