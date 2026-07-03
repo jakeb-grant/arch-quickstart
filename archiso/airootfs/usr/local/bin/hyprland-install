@@ -21,6 +21,9 @@ echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 # fires ERR, so cleanup must hang off EXIT, gated on the exit status.
 on_exit() {
     local rc=$?
+    # A reflexive Ctrl-C at the error report must not truncate cleanup;
+    # default handling is restored for the pause below so Ctrl-C works there
+    trap '' INT TERM
     if (( rc != 0 && BASH_SUBSHELL == 0 )); then
         if (( DISK_TOUCHED == 1 )); then
             cleanup_on_failure
@@ -29,6 +32,7 @@ on_exit() {
         # asked to leave (Ctrl-C = 130, SIGTERM = 143)
         if (( rc != 130 && rc != 143 )); then
             echo "Press Enter to exit..." >&2
+            trap - INT TERM
             read -r || true
         fi
     fi
@@ -887,8 +891,8 @@ partition_disk() {
     partprobe "$DISK" 2>/dev/null || true
     udevadm settle
 
-    # Determine partition names (handle nvme vs sd naming)
-    if [[ "$DISK" == *"nvme"* ]]; then
+    # Determine partition names (nvme/mmcblk use a 'p' suffix, sd/vd don't)
+    if [[ "$DISK" == *"nvme"* || "$DISK" == *"mmcblk"* ]]; then
         EFI_PART="${DISK}p1"
         ROOT_PART="${DISK}p2"
     else
@@ -1547,7 +1551,9 @@ setup_dotfiles() {
         success "Found pre-loaded dotfiles on ISO!"
         echo
 
-        if confirm "Apply pre-loaded dotfiles using chezmoi?"; then
+        # Bare gum confirm: the system is fully installed - Ctrl-C/Esc here
+        # must mean "no", not a cancel that tears the install down
+        if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
             # Copy dotfiles to chezmoi's default source location (use /. to include hidden files)
             info "Copying dotfiles to installed system..."
             mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi"
@@ -1571,7 +1577,8 @@ setup_dotfiles() {
     fi
 
     # No local dotfiles or user declined - prompt for remote repo
-    if ! confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
+    # Bare gum confirm: cancel = skip, same as answering no (see above)
+    if ! gum confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
         info "Skipping dotfiles setup."
         sleep 1
         return
@@ -1711,7 +1718,9 @@ PACMANCONF
         "come from your dotfiles (see dotfiles.conf) and package lists."
 
     echo
-    if confirm "Reboot now?"; then
+    # Bare gum confirm: install is complete - Ctrl-C/Esc = "reboot manually",
+    # never the failure-cleanup path
+    if gum confirm "Reboot now?"; then
         umount -R /mnt
         # Successful install: shutdown's SIGTERM must not trigger the
         # failure cleanup

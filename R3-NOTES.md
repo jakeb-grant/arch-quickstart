@@ -329,6 +329,33 @@ review. Deviations from / additions to the planned design, all review-driven:
   medium actually being a would-be candidate. Fails open (copytoram).
   5-scenario harness.
 
+## Final cumulative review (fresh-eyes pass over fa6e8dd..HEAD)
+
+After all four sections landed, a fresh-eyes agent reviewed the cumulative
+diff for cross-section interactions the per-section reviews couldn't see.
+Two real composition bugs found and fixed, one nit hardened:
+
+1. **eMMC partition naming**: S4 made `mmcblk` selectable but partition_disk
+   only p-suffixed nvme → an eMMC install would wipe the disk, then die at
+   the device-node wait. Fixed: `nvme|mmcblk` both get the `p` suffix.
+2. **Post-install cancels hit failure cleanup**: Ctrl-C at the dotfiles /
+   "Reboot now?" confirms after a successful install ran cleanup_on_failure
+   ("safe to re-run the installer"!) and skipped finish() — offline installs
+   would keep the offline pacman.conf. Fixed: the three post-install confirm
+   sites use bare `gum confirm` (cancel = "no"), matching the inline dotfiles
+   prompt's invariant; the `confirm` wrapper remains at all pre-install sites.
+3. **INT window in on_exit**: `trap '' INT TERM` now set as on_exit's first
+   action (was only inside cleanup), and restored before the pause so Ctrl-C
+   still works there.
+
+Also verified clean by that pass: no die/wrapper calls inside subshell
+contexts anywhere, gum's raw-mode ^C consumption vs the INT trap is coherent,
+pre-flight/on_exit/finish cleanup ordering has no double-clean, the gum-less
+early-exit path never touches gum, and boot-medium exclusion composes with
+OFFLINE_MODE. Straggler sweep: only-wrapper gum prompts confirmed, remaining
+`|| true` sites all in the documented-benign list, README disk-selection
+bullet updated for the boot-medium exclusion.
+
 ## Status
 
 - [x] State-lifecycle review incorporated

@@ -28,7 +28,7 @@ If using Ventoy, boot the ISO in **GRUB2 mode**:
 The TUI installer launches automatically and guides you through:
 
 #### Disk Selection
-- Lists all available disks (NVMe, SATA, etc.)
+- Lists all available disks (NVMe, SATA, eMMC, etc.), excluding the USB stick the installer booted from
 - Requires double confirmation before wiping
 
 #### System Configuration
