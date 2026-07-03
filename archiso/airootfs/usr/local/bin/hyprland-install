@@ -111,6 +111,58 @@ header() {
     echo
 }
 
+# Clean user cancel: no scary error report. Cleanup still runs via the EXIT
+# trap once the disk has been touched; 130 also skips the exit pause.
+cancelled() {
+    echo "" >&2
+    warn "Installation cancelled."
+    exit 130
+}
+
+# Prompt wrappers. gum exits non-zero on Esc/Ctrl-C; a bare X=$(gum ...) would
+# route that through the ERR trap as a scary "command failed". Run gum in a
+# condition context instead (no errexit/ERR inside) and treat non-zero as a
+# user cancel. The result is assigned to the named variable; bash's dynamic
+# scoping means this works for callers' locals too.
+prompt_input() {
+    local __var="$1" __val
+    shift
+    if ! __val=$(gum input "$@"); then
+        cancelled
+    fi
+    printf -v "$__var" '%s' "$__val"
+}
+
+prompt_choose() {
+    local __var="$1" __val
+    shift
+    if ! __val=$(gum choose "$@"); then
+        cancelled
+    fi
+    printf -v "$__var" '%s' "$__val"
+}
+
+prompt_filter() {
+    local __var="$1" __val
+    shift
+    if ! __val=$(gum filter "$@"); then
+        cancelled
+    fi
+    printf -v "$__var" '%s' "$__val"
+}
+
+# gum confirm wrapper: yes = 0, no = 1, Ctrl-C (and Esc on newer gum) = 130 =
+# clean cancel. Must be called in a condition context (if/&&/||) like gum
+# confirm itself.
+confirm() {
+    local rc=0
+    gum confirm "$@" || rc=$?
+    if (( rc == 130 )); then
+        cancelled
+    fi
+    return "$rc"
+}
+
 # Parse a package list file: strip comments (# to end of line), trim
 # whitespace and CR, drop blank lines. One package name per output line.
 read_package_list() {
@@ -255,7 +307,7 @@ validate_offline_repo() {
         echo
         warn "These packages will fail to install in offline mode."
         echo
-        if ! gum confirm --default=false "Continue anyway?"; then
+        if ! confirm --default=false "Continue anyway?"; then
             die "Installation cancelled - offline repository incomplete"
         fi
     else
@@ -344,7 +396,7 @@ check_network() {
 
     # Check if WiFi interfaces exist
     if compgen -G '/sys/class/net/wl*' > /dev/null; then
-        if gum confirm "Would you like to connect to WiFi?"; then
+        if confirm "Would you like to connect to WiFi?"; then
             connect_wifi
         else
             die "Internet connection required for installation."
@@ -409,7 +461,7 @@ connect_wifi() {
 
     info "Select WiFi network:"
     local ssid
-    ssid=$(echo "$networks" | gum choose --height=15)
+    prompt_choose ssid --height=15 < <(echo "$networks")
 
     if [[ -z "$ssid" ]]; then
         die "No network selected!"
@@ -417,7 +469,7 @@ connect_wifi() {
 
     info "Enter password for '$ssid':"
     local wifi_password
-    wifi_password=$(gum input --password --placeholder "WiFi password")
+    prompt_input wifi_password --password --placeholder "WiFi password"
 
     info "Connecting to '$ssid'..."
     if iwctl --passphrase "$wifi_password" station "$wifi_device" connect "$ssid" 2>&1; then
@@ -430,7 +482,7 @@ connect_wifi() {
     fi
 
     warn "Failed to connect. Try again?"
-    if gum confirm; then
+    if confirm; then
         connect_wifi
     else
         die "Internet connection required for installation."
@@ -462,7 +514,7 @@ welcome() {
         "This will install a clean Arch Linux system with Hyprland."
 
     echo
-    if ! gum confirm "Ready to proceed?"; then
+    if ! confirm "Ready to proceed?"; then
         gum style --foreground="#f9e2af" "Installation cancelled."
         exit 0
     fi
@@ -488,7 +540,7 @@ select_disk() {
     gum style --foreground="#cba6f7" "Select the target disk for installation:"
     echo
 
-    DISK=$(printf '%s\n' "${disks[@]}" | gum choose --height=10)
+    prompt_choose DISK --height=10 < <(printf '%s\n' "${disks[@]}")
     DISK=$(echo "$DISK" | awk '{print $1}')
 
     if [[ -z "$DISK" ]]; then
@@ -502,14 +554,14 @@ select_disk() {
     lsblk "$DISK"
     echo
 
-    if ! gum confirm --default=false "Are you sure you want to erase $DISK?"; then
+    if ! confirm --default=false "Are you sure you want to erase $DISK?"; then
         die "Installation cancelled by user."
     fi
 
     # Double confirmation for safety
     echo
     gum style --foreground="#f38ba8" "Type 'yes' to confirm disk erasure:"
-    CONFIRM=$(gum input --placeholder "Type 'yes' to confirm")
+    prompt_input CONFIRM --placeholder "Type 'yes' to confirm"
 
     if [[ "$CONFIRM" != "yes" ]]; then
         die "Installation cancelled."
@@ -527,14 +579,14 @@ configure_user() {
 
     # Hostname
     info "Enter hostname:"
-    HOSTNAME=$(gum input --placeholder "archlinux" --value "${DEFAULT_HOSTNAME:-archlinux}")
+    prompt_input HOSTNAME --placeholder "archlinux" --value "${DEFAULT_HOSTNAME:-archlinux}"
     HOSTNAME=${HOSTNAME:-archlinux}
 
     echo
 
     # Username - pre-filled with default
     info "Enter username:"
-    USERNAME=$(gum input --placeholder "$DEFAULT_USERNAME" --value "$DEFAULT_USERNAME")
+    prompt_input USERNAME --placeholder "$DEFAULT_USERNAME" --value "$DEFAULT_USERNAME"
     USERNAME=${USERNAME:-$DEFAULT_USERNAME}
 
     if [[ -z "$USERNAME" ]]; then
@@ -545,14 +597,14 @@ configure_user() {
 
     # Password - must be entered
     info "Enter password for $USERNAME:"
-    PASSWORD=$(gum input --password --placeholder "Password")
+    prompt_input PASSWORD --password --placeholder "Password"
 
     if [[ -z "$PASSWORD" ]]; then
         die "Password cannot be empty!"
     fi
 
     info "Confirm password:"
-    PASSWORD_CONFIRM=$(gum input --password --placeholder "Confirm password")
+    prompt_input PASSWORD_CONFIRM --password --placeholder "Confirm password"
 
     if [[ "$PASSWORD" != "$PASSWORD_CONFIRM" ]]; then
         die "Passwords do not match!"
@@ -564,19 +616,19 @@ configure_user() {
     ENCRYPT_DISK="no"
     ENCRYPT_PASSWORD=""
     info "Disk encryption (LUKS):"
-    if gum confirm --default=false "Enable full disk encryption?"; then
+    if confirm --default=false "Enable full disk encryption?"; then
         ENCRYPT_DISK="yes"
-        if gum confirm "Use the same password for encryption?"; then
+        if confirm "Use the same password for encryption?"; then
             ENCRYPT_PASSWORD="$PASSWORD"
         else
             info "Enter encryption passphrase:"
-            ENCRYPT_PASSWORD=$(gum input --password --placeholder "Encryption passphrase")
+            prompt_input ENCRYPT_PASSWORD --password --placeholder "Encryption passphrase"
             if [[ -z "$ENCRYPT_PASSWORD" ]]; then
                 die "Encryption passphrase cannot be empty!"
             fi
             info "Confirm encryption passphrase:"
             local encrypt_confirm
-            encrypt_confirm=$(gum input --password --placeholder "Confirm passphrase")
+            prompt_input encrypt_confirm --password --placeholder "Confirm passphrase"
             if [[ "$ENCRYPT_PASSWORD" != "$encrypt_confirm" ]]; then
                 die "Encryption passphrases do not match!"
             fi
@@ -587,10 +639,11 @@ configure_user() {
 
     # Timezone - pre-filled with default, option to change
     info "Timezone (default: $DEFAULT_TIMEZONE):"
-    if gum confirm "Use default timezone ($DEFAULT_TIMEZONE)?"; then
+    if confirm "Use default timezone ($DEFAULT_TIMEZONE)?"; then
         TIMEZONE="$DEFAULT_TIMEZONE"
     else
-        TIMEZONE=$(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort | gum filter --height=15 --placeholder="Search timezone..." --value="America/")
+        prompt_filter TIMEZONE --height=15 --placeholder="Search timezone..." --value="America/" \
+            < <(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort)
         TIMEZONE=${TIMEZONE:-$DEFAULT_TIMEZONE}
     fi
 
@@ -599,10 +652,10 @@ configure_user() {
     # Git configuration - pre-filled with defaults, editable
     info "Git configuration:"
     info "  Git username:"
-    GIT_USER_NAME=$(gum input --placeholder "Git username" --value "$GIT_USER_NAME")
+    prompt_input GIT_USER_NAME --placeholder "Git username" --value "$GIT_USER_NAME"
 
     info "  Git email:"
-    GIT_USER_EMAIL=$(gum input --placeholder "Git email" --value "$GIT_USER_EMAIL")
+    prompt_input GIT_USER_EMAIL --placeholder "Git email" --value "$GIT_USER_EMAIL"
 
     echo
     success "Configuration summary:"
@@ -617,7 +670,7 @@ configure_user() {
     fi
     echo
 
-    if ! gum confirm "Proceed with these settings?"; then
+    if ! confirm "Proceed with these settings?"; then
         configure_user
     fi
 }
@@ -721,7 +774,7 @@ configure_extras() {
     fi
 
     info "Select GPU setup:"
-    GPU_SETUP=$(printf '%s\n' "${gpu_options[@]}" | gum choose)
+    prompt_choose GPU_SETUP < <(printf '%s\n' "${gpu_options[@]}")
 
     # Extract just the script name from selection
     case "$GPU_SETUP" in
@@ -742,10 +795,10 @@ configure_extras() {
     echo
 
     # Use gum choose with --no-limit for multi-select
-    FIREWALL_RULES=$(gum choose --no-limit \
+    prompt_choose FIREWALL_RULES --no-limit \
         "SSH (port 22)" \
         "HTTP/HTTPS (ports 80, 443)" \
-        "KDE Connect / GSConnect (ports 1714-1764)")
+        "KDE Connect / GSConnect (ports 1714-1764)"
 
     echo
     success "Configuration summary:"
@@ -759,7 +812,7 @@ configure_extras() {
     fi
     echo
 
-    if ! gum confirm "Proceed with these settings?"; then
+    if ! confirm "Proceed with these settings?"; then
         configure_extras
     fi
 }
@@ -1445,7 +1498,7 @@ setup_dotfiles() {
         success "Found pre-loaded dotfiles on ISO!"
         echo
 
-        if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
+        if confirm "Apply pre-loaded dotfiles using chezmoi?"; then
             # Copy dotfiles to chezmoi's default source location (use /. to include hidden files)
             info "Copying dotfiles to installed system..."
             mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi"
@@ -1469,7 +1522,7 @@ setup_dotfiles() {
     fi
 
     # No local dotfiles or user declined - prompt for remote repo
-    if ! gum confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
+    if ! confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
         info "Skipping dotfiles setup."
         sleep 1
         return
@@ -1492,7 +1545,13 @@ setup_dotfiles() {
     # Pre-fill with the configured repo from /etc/dotfiles.conf (parsed, not
     # sourced); the user can type over it freely
     default_repo=$(grep -oP "^DOTFILES_REPO=\K.*" /etc/dotfiles.conf 2>/dev/null | tail -1 || true)
-    dotfiles_repo=$(gum input --placeholder "GitHub username or repo URL" --value "$default_repo")
+    # Cancel here must not abort the installer - the system is already fully
+    # installed at this point; it just skips dotfiles
+    if ! dotfiles_repo=$(gum input --placeholder "GitHub username or repo URL" --value "$default_repo"); then
+        warn "Skipping dotfiles setup."
+        sleep 1
+        return
+    fi
 
     if [[ -z "$dotfiles_repo" ]]; then
         warn "No repository specified. Skipping dotfiles setup."
@@ -1600,7 +1659,7 @@ PACMANCONF
         "come from your dotfiles (see dotfiles.conf) and package lists."
 
     echo
-    if gum confirm "Reboot now?"; then
+    if confirm "Reboot now?"; then
         umount -R /mnt
         # Successful install: shutdown's SIGTERM must not trigger the
         # failure cleanup
