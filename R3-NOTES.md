@@ -317,10 +317,17 @@ review. Deviations from / additions to the planned design, all review-driven:
   check dies via gum). `--show-error` added to the five destructive `gum spin`
   sites. The `|| true` fallback revivals also fix a latent `head -1` SIGPIPE
   spurious-ERR in the wifi_device pipeline.
-- **S4**: boot-medium exclusion walks `lsblk -no PKNAME` up the chain
-  (handles Ventoy dm → partition → disk), fails open; disk regex tightened
-  with a `[[:space:]]` anchor (adds `mmcblk`, excludes `mmcblkXboot0`); note
-  printed when a disk is withheld. 5-scenario harness.
+- **S4 (`9160d7d`)**: boot-medium exclusion resolves the whole disk with ONE
+  inverse-tree call — `lsblk -srno NAME "$boot_src" | tail -1` — after review
+  caught (and reproduced on util-linux 2.42.2) that the first-draft PKNAME
+  walk infinite-loops: `lsblk -no PKNAME <disk>` prints the whole subtree
+  NOT queried-device-first, so `head -1` returns a child. Lesson recorded:
+  the harness passed with idealized stubs — stubs must mirror real tool
+  output shapes (harness fixed accordingly, and the fix verified against
+  real devices). Disk regex tightened with a `[[:space:]]` anchor (adds
+  `mmcblk`, excludes `mmcblkXboot0`/`rpmb`); exclusion note gated on the
+  medium actually being a would-be candidate. Fails open (copytoram).
+  5-scenario harness.
 
 ## Status
 
@@ -329,6 +336,7 @@ review. Deviations from / additions to the planned design, all review-driven:
 - [x] Section 1 — cleanup infrastructure (`09463c4`)
 - [x] Section 2 — cancel handling (`845dd55`)
 - [x] Section 3 — post-step verification (`d4d9c7a`)
-- [ ] Section 4 — exclude live-boot device (built + harness-passed; agent
-      review in flight, commit pending)
-- [ ] BACKLOG.md R3 entry closed; this doc folded/removed
+- [x] Section 4 — exclude live-boot device (`9160d7d`; review blocker fixed
+      and re-verified before commit)
+- [x] BACKLOG.md R3 entry closed 2026-07-02. This doc retained as the R3
+      record (referenced from BACKLOG); safe to delete once no longer useful.
