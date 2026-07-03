@@ -19,7 +19,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | 3. Installer correctness | H2, M3, M8, L4 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
 | 4. Setup scripts | H5, H6, M2/R1, L5, L6 | ✅ Fixed 2026-07-02, diff-reviewed (2× LGTM) |
 | 5. Validation, tests, docs | H8, M9, M10, M7, M8-docs | ✅ Fixed 2026-07-02, diff-reviewed (2 agents: 1 LGTM, 1 real finding fixed + re-verified) |
-| Unscheduled | L8, R3 (R2 completed with Section 5; L3 closed by design — fork note added to README) | ⬜ |
+| Unscheduled | R3 (L8 fixed 2026-07-02 — dotfiles.conf moved into airootfs/etc as single source of truth; R2 completed with Section 5; L3 closed by design — fork note added to README) | ⬜ |
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 
@@ -169,7 +169,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 - **✅ L5 (FIXED — unmatched marketing strings now classify by PCI device ID: ≥0x1E00 = Turing+ → nvidia-open-dkms, else/lookup-failure → legacy)** — NVIDIA GPU-generation detection keys off `lspci` marketing strings that are often absent; an unlabeled modern card can be misclassified as LEGACY and get the wrong driver. (`nvidia-setup`) ☑️
 - **✅ L6 (FIXED — flips commented/uncommented setting in place, else inserts under `[Policy]`, else appends a new `[Policy]` section; simulated across 4 main.conf shapes)** — `bluetooth-setup` `AutoEnable` edit only rewrites the commented default; the append fallback can land outside `[Policy]` where bluez ignores it. (`bluetooth-setup`) ☑️
 - **L7** — `Installation_guide` references `w3m` which isn't installed (degrades gracefully to printing the URL). Add `w3m` or drop the branch. ✅
-- **L8** — `dotfiles-setup` has its own empty `DEFAULT_REPO=""`, a third dotfiles source of truth independent of `dotfiles.conf`/`install.conf`. ☑️
+- **✅ L8 (FIXED — dotfiles.conf moved to `airootfs/etc/`, so it ships on the live ISO and is copied to the installed system's `/etc/dotfiles.conf`; `dotfiles-setup` and the installer's remote-repo prompt both default from it via parse-not-source grep; CI syncs a dispatch-input override back into the baked conf)** — `dotfiles-setup` has its own empty `DEFAULT_REPO=""`, a third dotfiles source of truth independent of `dotfiles.conf`/`install.conf`. ☑️
 - **Note** — The ERR trap echoes `$BASH_COMMAND` on failure; investigated as a possible password leak but bash does **not** expand variables in `$BASH_COMMAND`, so the LUKS/user passwords are not exposed. No action required; noted for future edits to that trap.
 
 ---

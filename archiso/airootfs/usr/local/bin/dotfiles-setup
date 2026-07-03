@@ -24,9 +24,10 @@ source "$SETUP_LIB"
 # CONFIGURATION
 # =============================================================================
 
-# Default dotfiles repository (leave empty to require argument)
-DEFAULT_REPO=""
-# Example: DEFAULT_REPO="https://github.com/username/dotfiles.git"
+# Default dotfiles repository: DOTFILES_REPO from /etc/dotfiles.conf, installed
+# by the ISO (same file that seeds offline builds). Parsed, not sourced, so the
+# conf cannot execute shell here. An explicit argument always wins.
+DEFAULT_REPO=$(grep -oP "^DOTFILES_REPO=\K.*" /etc/dotfiles.conf 2>/dev/null | tail -1 || true)
 
 # =============================================================================
 
@@ -52,7 +53,7 @@ if [[ -z "$REPO" ]]; then
     echo "  dotfiles-setup jakeb-grant"
     echo "  dotfiles-setup https://github.com/user/dotfiles.git"
     echo
-    echo "Or edit this script to set DEFAULT_REPO"
+    echo "Or set DOTFILES_REPO in /etc/dotfiles.conf"
     exit 1
 fi
 

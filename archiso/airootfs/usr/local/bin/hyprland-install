@@ -1059,6 +1059,12 @@ EOF
         fi
     done
 
+    # dotfiles.conf rides along so dotfiles-setup can default to the
+    # configured repo on the installed system
+    if [[ -f /etc/dotfiles.conf ]]; then
+        cp /etc/dotfiles.conf /mnt/etc/dotfiles.conf
+    fi
+
     success "System configured!"
     sleep 1
 }
@@ -1377,8 +1383,11 @@ setup_dotfiles() {
     info "(e.g., 'jakeb-grant' or 'https://github.com/user/dotfiles.git')"
     echo
 
-    local dotfiles_repo
-    dotfiles_repo=$(gum input --placeholder "GitHub username or repo URL")
+    local dotfiles_repo default_repo
+    # Pre-fill with the configured repo from /etc/dotfiles.conf (parsed, not
+    # sourced); the user can type over it freely
+    default_repo=$(grep -oP "^DOTFILES_REPO=\K.*" /etc/dotfiles.conf 2>/dev/null | tail -1 || true)
+    dotfiles_repo=$(gum input --placeholder "GitHub username or repo URL" --value "$default_repo")
 
     if [[ -z "$dotfiles_repo" ]]; then
         warn "No repository specified. Skipping dotfiles setup."

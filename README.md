@@ -224,14 +224,18 @@ DEFAULT_SHELL="/bin/bash"
 
 These are only pre-filled defaults for the installer prompts—every one can be changed at install time. **Forking this repo?** Swap in your own values here (the username/name/email above are the author's) and point `dotfiles.conf` below at your own dotfiles repo.
 
-### `dotfiles.conf` - Offline Dotfiles
+### `archiso/airootfs/etc/dotfiles.conf` - Dotfiles Repository
 
 ```bash
-# Dotfiles repository to include in offline ISO builds
+# Dotfiles repository for ISO builds and dotfiles-setup
 DOTFILES_REPO=https://github.com/jakeb-grant/dotfiles
 ```
 
-When set, the offline ISO will include pre-cloned dotfiles at `/opt/dotfiles`. The installer detects these and offers to apply them automatically—no network required.
+The single source of truth for your dotfiles repo:
+
+- **Offline ISO builds**: the repo is pre-cloned to `/opt/dotfiles` on the ISO. The installer detects it and offers to apply it automatically—no network required.
+- **Installer prompt**: the remote-repo prompt comes pre-filled with this value (editable).
+- **Installed system**: the file lands at `/etc/dotfiles.conf`, where `dotfiles-setup` uses it as the default repo when run without an argument.
 
 Leave empty to skip pre-loading dotfiles. Users can still enter a repo URL during installation if network is available.
 
@@ -268,9 +272,9 @@ archiso/
 ├── profiledef.sh              # ISO profile configuration
 ├── packages.x86_64            # Live ISO packages
 ├── pacman.conf                # Pacman config (multilib enabled)
-├── dotfiles.conf              # Dotfiles repo for offline ISO
 ├── airootfs/
 │   ├── etc/
+│   │   ├── dotfiles.conf      # Dotfiles repo (offline builds + dotfiles-setup default)
 │   │   ├── pacman.conf        # Target system pacman config
 │   │   ├── pacman.d/
 │   │   │   ├── mirrorlist

@@ -22,6 +22,7 @@ file_permissions=(
   ["/etc/shadow"]="0:0:400"
   ["/etc/gshadow"]="0:0:400"
   ["/etc/ssh/sshd_config.d"]="0:0:755"
+  ["/etc/dotfiles.conf"]="0:0:644"
   ["/root"]="0:0:750"
   ["/root/.automated_script.sh"]="0:0:755"
   ["/root/.gnupg"]="0:0:700"

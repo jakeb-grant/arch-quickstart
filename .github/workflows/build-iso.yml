@@ -377,14 +377,16 @@ jobs:
           docker exec archbuild bash -c '
             set -euo pipefail
             DOTFILES_REPO="${DOTFILES_REPO:-}"
+            DOTFILES_CONF=/workspace/archiso/airootfs/etc/dotfiles.conf
+            REPO_FROM_INPUT="$DOTFILES_REPO"
 
             # Fall back to the committed config, parsing (not sourcing) it so a
             # crafted dotfiles.conf cannot execute shell in this container.
             # Value must be an unquoted URL, as documented in the README.
-            if [[ -z "$DOTFILES_REPO" ]] && [[ -f /workspace/archiso/dotfiles.conf ]]; then
+            if [[ -z "$DOTFILES_REPO" ]] && [[ -f "$DOTFILES_CONF" ]]; then
               # || true: dotfiles.conf may legitimately omit/comment the key
               # ("leave empty to skip"), and grep exits 1 on no match.
-              DOTFILES_REPO=$(grep -oP "^DOTFILES_REPO=\K.*" /workspace/archiso/dotfiles.conf | tail -1 || true)
+              DOTFILES_REPO=$(grep -oP "^DOTFILES_REPO=\K.*" "$DOTFILES_CONF" | tail -1 || true)
             fi
 
             if [[ -z "$DOTFILES_REPO" ]]; then
@@ -402,6 +404,13 @@ jobs:
               *)
                 echo "ERROR: DOTFILES_REPO must be an https:// URL, got: $DOTFILES_REPO"; exit 1 ;;
             esac
+
+            # If the dispatch input overrode the committed config, sync the
+            # (validated) value into the conf baked into the ISO so
+            # /etc/dotfiles.conf matches the pre-cloned /opt/dotfiles.
+            if [[ -n "$REPO_FROM_INPUT" ]]; then
+              printf "DOTFILES_REPO=%s\n" "$DOTFILES_REPO" > "$DOTFILES_CONF"
+            fi
 
             echo "Cloning dotfiles from: $DOTFILES_REPO"
             git clone --depth 1 -- "$DOTFILES_REPO" /workspace/archiso/airootfs/opt/dotfiles
