@@ -6,8 +6,37 @@
 
 set -eEo pipefail
 
-# Trap errors and show what failed
-trap 'echo ""; echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND"; echo "Press Enter to exit..."; read' ERR
+# Trap errors and show what failed. Messages go to stderr so they stay
+# visible when the trap fires inside a $( ) / <( ) subshell, where stdout is
+# captured by the parent, not displayed. bash does not expand variables in
+# $BASH_COMMAND, so this cannot leak passwords. The exit pause lives in
+# on_exit below, AFTER cleanup - so a user who power-cycles at the prompt
+# instead of pressing Enter still gets a clean machine.
+trap 'echo "" >&2
+echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+
+# On any non-zero exit after the disk has been touched (ERR above, die(),
+# Ctrl-C), tear down mounts and the LUKS mapping so the machine is left clean
+# and the installer is safe to re-run. die() calls exit directly and never
+# fires ERR, so cleanup must hang off EXIT, gated on the exit status.
+on_exit() {
+    local rc=$?
+    if (( rc != 0 && BASH_SUBSHELL == 0 )); then
+        if (( DISK_TOUCHED == 1 )); then
+            cleanup_on_failure
+        fi
+        # Keep the failure output visible; skip the pause when the user
+        # asked to leave (Ctrl-C = 130, SIGTERM = 143)
+        if (( rc != 130 && rc != 143 )); then
+            echo "Press Enter to exit..." >&2
+            read -r || true
+        fi
+    fi
+    exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Colors for gum
 export GUM_CHOOSE_CURSOR_FOREGROUND="#89b4fa"
@@ -24,6 +53,9 @@ CONFIG_FILE="/root/install.conf"
 # Offline installation mode
 OFFLINE_REPO="/opt/offline-repo"
 OFFLINE_MODE=0
+
+# Set once partitioning begins; gates the EXIT-trap cleanup above
+DISK_TOUCHED=0
 
 # Physical offset of the swapfile, set by configure_swap and consumed by
 # configure_system for the resume= / resume_offset= kernel parameters
@@ -92,6 +124,66 @@ read_package_list() {
             printf '%s\n' "$line"
         fi
     done < "$file"
+}
+
+# Best-effort teardown of the install target: unmount the /mnt tree and close
+# the LUKS mapping. Subshell body, so the set +e / trap changes cannot leak
+# into the caller, and it always returns success. Used by cleanup_on_failure
+# and by the partition_disk pre-flight.
+teardown_target() (
+    set +e
+    trap - ERR
+    # Ctrl-C must not abort teardown partway
+    trap '' INT TERM
+
+    # pacstrap -K starts a gpg-agent for the target keyring on the host side;
+    # it can hold files under /mnt open and make the unmount fail busy
+    if [[ -d /mnt/etc/pacman.d/gnupg ]]; then
+        gpgconf --homedir /mnt/etc/pacman.d/gnupg --kill all 2>/dev/null
+    fi
+
+    if mountpoint -q /mnt 2>/dev/null; then
+        for _ in 1 2 3; do
+            umount -R /mnt 2>/dev/null && break
+            # umount -R stops at the first busy submount - kill whatever
+            # still holds files open under /mnt and retry
+            fuser -km /mnt 2>/dev/null
+            sleep 1
+        done
+    fi
+    if mountpoint -q /mnt 2>/dev/null; then
+        warn "Could not unmount /mnt - run 'umount -R /mnt' manually"
+    fi
+
+    if [[ -e /dev/mapper/cryptroot ]]; then
+        # udev can transiently hold the dm node right after the unmount
+        udevadm settle 2>/dev/null
+        for _ in 1 2 3; do
+            cryptsetup close cryptroot 2>/dev/null && break
+            sleep 1
+        done
+    fi
+    if [[ -e /dev/mapper/cryptroot ]]; then
+        warn "Could not close LUKS container - run 'cryptsetup close cryptroot' manually"
+    fi
+    true
+)
+
+# Runs from the EXIT trap after a failed exit once the disk has been touched.
+cleanup_on_failure() {
+    # Must never abort partway: disable errexit, the ERR trap, and Ctrl-C
+    # for the duration (this runs during exit processing anyway)
+    set +e
+    trap - ERR
+    trap '' INT TERM
+
+    echo "" >&2
+    warn "Cleaning up..."
+    teardown_target
+
+    if ! mountpoint -q /mnt 2>/dev/null && [[ ! -e /dev/mapper/cryptroot ]]; then
+        info "Target unmounted - it is safe to re-run the installer."
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -680,6 +772,19 @@ partition_disk() {
     header
     info "Partitioning $DISK..."
     echo
+
+    # Leftovers from a previous failed run block wipefs/parted (held
+    # partitions can't be re-read) - tear them down so a re-run just works
+    if mountpoint -q /mnt 2>/dev/null || [[ -e /dev/mapper/cryptroot ]]; then
+        warn "  Clearing leftovers from a previous run..."
+        teardown_target
+        if mountpoint -q /mnt 2>/dev/null || [[ -e /dev/mapper/cryptroot ]]; then
+            die "Could not clear previous install state - unmount /mnt and close 'cryptroot' manually, then retry"
+        fi
+    fi
+
+    # Point of no return: enable cleanup-on-failure from here on
+    DISK_TOUCHED=1
 
     gum spin --spinner dot --title "Wiping disk..." -- \
         wipefs -af "$DISK"
@@ -1497,6 +1602,9 @@ PACMANCONF
     echo
     if gum confirm "Reboot now?"; then
         umount -R /mnt
+        # Successful install: shutdown's SIGTERM must not trigger the
+        # failure cleanup
+        DISK_TOUCHED=0
         reboot
     else
         info "You can reboot manually when ready."
