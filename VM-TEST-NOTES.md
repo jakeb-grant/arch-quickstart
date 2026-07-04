@@ -198,4 +198,11 @@ local commit; **no push** — CI ~1h, batch at the end with Jacob's say-so).
   s1 harness no longer exists (scratchpad of a past session), so the new s5
   harness's teardown scenario covers that surface instead (full
   teardown_target flow with swapoff-before-umount ordering asserted)
-- [ ] Cumulative diff review across V1–V3, BACKLOG closure
+- [x] Cumulative diff review across V1–V3, BACKLOG closure — clean (no
+  cross-section issues; V3 swapon verified compatible with V2 grub steps and
+  the re-run pre-flight)
+
+All three landed 2026-07-03 as `576f08b` (V1), `abdd5df` (V2), `175e71a`
+(V3) — local only, not pushed. Remaining real-world acceptance: next
+fresh-VM install run validates V2 (factory OVMF vars, disk-only boot) and
+V3b (install at 4G RAM should now survive the AUR builds).
