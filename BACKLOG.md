@@ -203,14 +203,17 @@ exit). Three fixes fell out — full evidence and per-item plans in
 - **Fix:** ✅ word boundaries — `grep -iE '\b(amd|radeon|ati)\b'` at both
   sites. Table-driven test (10 real lspci lines) passes; 2-agent review clean.
 
-### V2. 🟡 GRUB registered via NVRAM entry only — no fallback loader
+### V2. ✅ GRUB registered via NVRAM entry only — no fallback loader
 - **Where:** `hyprland-install:1198` (single `grub-install --bootloader-id=GRUB`)
 - **Verified:** ✅ (failure mode observed in VM when NVRAM entries broke)
 - **What:** if the NVRAM entry is lost/invalidated (CMOS reset, board swap,
   disk moved, firmware update), firmware finds nothing at the UEFI default
   path and falls to PXE on a bootable disk.
-- **Fix:** second `grub-install … --removable` pass (installs
-  `EFI/BOOT/BOOTX64.EFI`, no NVRAM write) + extend the :1201 verification.
+- **Fix:** ✅ second `grub-install … --removable` pass (installs
+  `EFI/BOOT/BOOTX64.EFI`, no NVRAM write), verification extended to require
+  the fallback loader, README note added. 2-agent review clean. Real
+  acceptance lands with the next fresh-VM install (factory OVMF vars,
+  disk-only boot must work).
 
 ### V3. 🟠 Online AUR failure tears down a finished, bootable system
 - **Where:** `hyprland-install:1494-1532` (online path) + `configure_swap`

@@ -189,7 +189,9 @@ local commit; **no push** — CI ~1h, batch at the end with Jacob's say-so).
 
 - [x] V1 GPU regex word boundaries (installer + setup-common) — done; 10-case
   table test passed, shellcheck clean, 2-agent review clean
-- [ ] V2 grub-install --removable + verification + README note
+- [x] V2 grub-install --removable + verification + README note — done;
+  shellcheck clean, 2-agent review clean (VM acceptance pending next fresh
+  install run)
 - [ ] V3a online AUR per-package tolerance (+ Jacob's decision on severity)
 - [ ] V3b swapon during install + swapoff in finish/teardown (re-run s1)
 - [ ] Cumulative diff review across V1–V3, BACKLOG closure

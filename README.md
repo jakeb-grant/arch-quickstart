@@ -77,7 +77,7 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - Shell: `bash`
 - Multilib repository: Enabled (for 32-bit support)
 - Git configured with name/email
-- GRUB bootloader (UEFI)
+- GRUB bootloader (UEFI), plus a fallback copy at `EFI/BOOT/BOOTX64.EFI` so the disk boots even if the firmware's boot entry is lost (CMOS reset, board swap)
 - Services enabled: iwd, systemd-resolved, greetd
 
 ### 3. First Boot

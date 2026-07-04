@@ -1197,9 +1197,13 @@ EOF
     # Install bootloader
     info "  Installing GRUB bootloader..."
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+    # Second pass installs the UEFI fallback loader (EFI/BOOT/BOOTX64.EFI,
+    # no NVRAM write) so the disk stays bootable if the firmware boot entry
+    # is lost (CMOS reset, board swap, disk moved to another machine)
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --removable
     arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
     # Exit 0 from grub tools isn't proof the artifacts landed
-    [[ -s /mnt/boot/EFI/GRUB/grubx64.efi && -s /mnt/boot/grub/grub.cfg ]] \
+    [[ -s /mnt/boot/EFI/GRUB/grubx64.efi && -s /mnt/boot/EFI/BOOT/BOOTX64.EFI && -s /mnt/boot/grub/grub.cfg ]] \
         || die "GRUB did not produce a bootable configuration in /boot"
 
     # Enable services
