@@ -215,7 +215,7 @@ exit). Three fixes fell out — full evidence and per-item plans in
   acceptance lands with the next fresh-VM install (factory OVMF vars,
   disk-only boot must work).
 
-### V3. 🟠 Online AUR failure tears down a finished, bootable system
+### V3. ✅ Online AUR failure tears down a finished, bootable system
 - **Where:** `hyprland-install:1494-1532` (online path) + `configure_swap`
 - **Verified:** ✅ (happened on test run #1: two `-git` builds OOM-killed at
   4 GB RAM → set -e → ERR trap → full teardown of a complete base system)
@@ -223,10 +223,13 @@ exit). Three fixes fell out — full evidence and per-item plans in
   path already warns-and-continues per package, the online path is
   all-or-nothing. Underlying build failure was OOM — the RAM-sized target
   swapfile exists by then but is never `swapon`'d during install.
-- **Fix:** (a) per-package tolerance in the online path mirroring offline
-  semantics; (b) `swapon` target swapfile after mkswap + `swapoff` in
-  `finish()` and `teardown_target()`; (c) Jacob decides failure severity
-  policy (recommended: never fatal, matching offline).
+- **Fix:** ✅ (a) per-package tolerance in the online path mirroring offline
+  semantics (failures collect in `~/.aur-failed`, warn summary + manual
+  yay command; yay bootstrap failure warns + skips the step, never fatal);
+  (b) `swapon` after the resume-offset probe + `swapoff` in `finish()` and
+  `teardown_target()`. Policy = never fatal (option 1). Verified by a
+  9-scenario namespace harness (s5) incl. teardown swapoff-before-umount
+  ordering; 2-agent review clean (stale R3-NOTES claims annotated).
 
 ---
 

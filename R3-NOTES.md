@@ -48,7 +48,7 @@ QEMU boot test of a locally built ISO.
 | 751/754 | `mkfs.btrfs -f` | no post-check |
 | 780-803 | mount root, create 5 subvolumes, remount all + `/mnt/boot` | state to unwind on failure |
 | 860/871 | `pacstrap` (offline/online) | post-check at 875 (`/mnt/usr/bin/ln`) — the model to copy |
-| 1112/1119 | swapfile `dd` + `mkswap` | **never `swapon`** during install → cleanup needs no swapoff |
+| 1112/1119 | swapfile `dd` + `mkswap` | **never `swapon`** during install → cleanup needs no swapoff *(changed by V3, 2026-07-03: install now swapons; teardown/finish swapoff — see VM-TEST-NOTES.md)* |
 | 987 | `arch-chroot mkinitcpio -P` | |
 | 991-992 | `grub-install` + `grub-mkconfig` | no check that EFI binary / grub.cfg landed → "complete" then black screen |
 | 1499 | `umount -R /mnt` in `finish()` | only on "Reboot now? yes"; no `cryptsetup close` (fine, rebooting) |
@@ -113,7 +113,9 @@ Retry-recursion sites (re-prompt loops via self-call): `connect_wifi` 342,
   `cryptroot` if left over from a previous failed run.
 - Redirect all trap output to `>&2` (fixes invisible-freeze + disk-list
   pollution when the trap fires inside `$( )`/`<( )` — exit-review #1/#2).
-- No swapoff needed (installer never swapons).
+- No swapoff needed (installer never swapons). *(Superseded by V3, 2026-07-03:
+  configure_swap now activates the swapfile for the install session, and
+  teardown_target/finish release it — see VM-TEST-NOTES.md.)*
 
 ### Section 2 — cancel ≠ error (~25 gum sites)
 

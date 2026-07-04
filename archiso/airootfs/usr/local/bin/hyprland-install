@@ -198,6 +198,10 @@ teardown_target() (
         gpgconf --homedir /mnt/etc/pacman.d/gnupg --kill all 2>/dev/null
     fi
 
+    # Active target swap (configure_swap) keeps the btrfs filesystem busy -
+    # release it before trying to unmount
+    swapoff /mnt/swap/swapfile 2>/dev/null
+
     if mountpoint -q /mnt 2>/dev/null; then
         for _ in 1 2 3; do
             umount -R /mnt 2>/dev/null && break
@@ -1343,6 +1347,14 @@ configure_swap() {
         warn "  Could not determine swapfile offset - hibernation will not be enabled"
     fi
 
+    # Activate the swapfile for the rest of the install: AUR builds later on
+    # can OOM 4-8GB machines otherwise (observed: rustc at 3.3GB RSS).
+    # Non-fatal - swap is a mitigation, not a requirement. Released in
+    # finish()/teardown_target() so /mnt can unmount. Kept after the
+    # map-swapfile probe above so the offset is read from a quiescent file.
+    info "  Activating swap for the install session..."
+    swapon /mnt/swap/swapfile || warn "  Could not activate swap - continuing without it"
+
     # Add to fstab
     info "  Adding swap to fstab..."
     echo "/swap/swapfile none swap defaults 0 0" >> /mnt/etc/fstab
@@ -1500,25 +1512,39 @@ install_aur_packages() {
         # Online mode: Build AUR packages with yay
         # Use user's home directory (guaranteed to exist after useradd -m)
         local script_path="/mnt/home/$USERNAME/install-aur.sh"
+        local failed_marker="/mnt/home/$USERNAME/.aur-failed"
 
-        # Create a script to run as the user for AUR installation
+        # Create a script to run as the user for AUR installation. By this
+        # point the base system is complete and bootable (GRUB is installed),
+        # so a broken optional package must never tear the install down:
+        # packages install one at a time, failures collect in ~/.aur-failed,
+        # and only a failed yay bootstrap (exit 2) skips the whole step.
         cat > "$script_path" << AURSCRIPT
 #!/bin/bash
-set -e
 
-cd ~
+cd ~ || exit 2
 
-# Install yay
+# Install yay - without the helper nothing below can run
 if ! command -v yay &>/dev/null; then
-    git clone https://aur.archlinux.org/yay-bin.git
-    cd yay-bin
-    makepkg -si --noconfirm
-    cd ..
+    if ! git clone https://aur.archlinux.org/yay-bin.git; then
+        exit 2
+    fi
+    if ! (cd yay-bin && makepkg -si --noconfirm); then
+        rm -rf yay-bin
+        exit 2
+    fi
     rm -rf yay-bin
 fi
 
-# Install AUR packages
-yay -S --noconfirm ${aur_packages[*]}
+# Install AUR packages one at a time so one failed build doesn't
+# take down the rest
+rm -f ~/.aur-failed
+for pkg in ${aur_packages[*]}; do
+    if ! yay -S --noconfirm "\$pkg"; then
+        echo "\$pkg" >> ~/.aur-failed
+    fi
+done
+exit 0
 AURSCRIPT
 
         chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
@@ -1530,10 +1556,36 @@ AURSCRIPT
         fi
 
         info "Building and installing yay (AUR helper)..."
-        arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh"
+        local aur_rc=0
+        arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh" || aur_rc=$?
 
         # Cleanup
         rm -f "$script_path"
+
+        if [[ $aur_rc -ne 0 ]]; then
+            # Bootstrap failed - the base system is done, so warn and move
+            # on rather than throw away a bootable install
+            echo
+            warn "Could not set up yay (AUR helper) - all AUR packages were skipped."
+            warn "After rebooting, install yay and run: yay -S ${aur_packages[*]}"
+            sleep 3
+            rm -f "$failed_marker"
+            return 0
+        fi
+
+        if [[ -s "$failed_marker" ]]; then
+            local failed_packages=()
+            mapfile -t failed_packages < "$failed_marker"
+            echo
+            warn "WARNING: ${#failed_packages[@]} AUR packages failed to build/install:"
+            for pkg in "${failed_packages[@]}"; do
+                echo "  - $pkg"
+            done
+            echo
+            warn "After rebooting, install manually with: yay -S ${failed_packages[*]}"
+            sleep 3
+        fi
+        rm -f "$failed_marker"
     fi
 
     success "AUR packages installed!"
@@ -1723,6 +1775,10 @@ PACMANCONF
         "come from your dotfiles (see dotfiles.conf) and package lists."
 
     echo
+    # Release the target swapfile activated during configure_swap - active
+    # swap would make umount -R /mnt fail busy
+    swapoff /mnt/swap/swapfile 2>/dev/null || true
+
     # Bare gum confirm: install is complete - Ctrl-C/Esc = "reboot manually",
     # never the failure-cleanup path
     if gum confirm "Reboot now?"; then

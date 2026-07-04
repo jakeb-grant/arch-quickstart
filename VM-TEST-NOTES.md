@@ -192,6 +192,10 @@ local commit; **no push** — CI ~1h, batch at the end with Jacob's say-so).
 - [x] V2 grub-install --removable + verification + README note — done;
   shellcheck clean, 2-agent review clean (VM acceptance pending next fresh
   install run)
-- [ ] V3a online AUR per-package tolerance (+ Jacob's decision on severity)
-- [ ] V3b swapon during install + swapoff in finish/teardown (re-run s1)
+- [x] V3a online AUR per-package tolerance — done; policy = never fatal
+  (option 1, the recommended default; say the word to change it)
+- [x] V3b swapon during install + swapoff in finish/teardown — done; the R3
+  s1 harness no longer exists (scratchpad of a past session), so the new s5
+  harness's teardown scenario covers that surface instead (full
+  teardown_target flow with swapoff-before-umount ordering asserted)
 - [ ] Cumulative diff review across V1–V3, BACKLOG closure
