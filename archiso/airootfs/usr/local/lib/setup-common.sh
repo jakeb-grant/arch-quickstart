@@ -163,7 +163,8 @@ detect_gpus() {
     all_gpus=$(lspci | grep -iE 'vga|3d|display' || true)
     DETECTED_NVIDIA=$(echo "$all_gpus" | grep -i 'nvidia' | head -1 || true)
     DETECTED_INTEL=$(echo "$all_gpus" | grep -iE 'intel.*(graphics|hd|uhd|iris|xe|arc)' | head -1 || true)
-    DETECTED_AMD=$(echo "$all_gpus" | grep -iE 'amd|radeon|ati' | head -1 || true)
+    # Word boundaries required: bare 'ati' matches "VGA compATIble controller"
+    DETECTED_AMD=$(echo "$all_gpus" | grep -iE '\b(amd|radeon|ati)\b' | head -1 || true)
 }
 
 # Heuristic: AMD APUs are branded "Radeon Graphics" (no RX/Pro model number)

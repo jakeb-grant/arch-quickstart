@@ -194,13 +194,14 @@ line/command, full teardown, clean re-run over a dirty disk, clean no-network
 exit). Three fixes fell out — full evidence and per-item plans in
 `VM-TEST-NOTES.md`.
 
-### V1. 🟠 GPU detection regex false-positive — every machine "detects" AMD
-- **Where:** `hyprland-install:733` + `setup-common.sh:166` (`detect_gpus`)
+### V1. ✅ GPU detection regex false-positive — every machine "detects" AMD
+- **Where:** `hyprland-install:734` + `setup-common.sh:167` (`detect_gpus`)
 - **Verified:** ✅ (observed in VM; reproduced by hand)
 - **What:** `grep -iE 'amd|radeon|ati'` matches "comp**ati**ble" in "VGA
   compatible controller" — present in ~every lspci GPU line — so
   `DETECTED_AMD` is always set (VM showed a virtio GPU as "AMD … (discrete)").
-- **Fix:** word boundaries — `grep -iE '\b(amd|radeon|ati)\b'` at both sites.
+- **Fix:** ✅ word boundaries — `grep -iE '\b(amd|radeon|ati)\b'` at both
+  sites. Table-driven test (10 real lspci lines) passes; 2-agent review clean.
 
 ### V2. 🟡 GRUB registered via NVRAM entry only — no fallback loader
 - **Where:** `hyprland-install:1198` (single `grub-install --bootloader-id=GRUB`)

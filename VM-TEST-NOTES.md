@@ -54,8 +54,8 @@ machines the menu shows a phantom "amd-setup (AMD … - detected)" entry and the
 recommendation logic can be skewed toward AMD.
 
 **Sites (2 real + 1 benign):**
-- `archiso/airootfs/usr/local/bin/hyprland-install:733` — `DETECTED_AMD=$(… grep -iE 'amd|radeon|ati' …)`
-- `archiso/airootfs/usr/local/lib/setup-common.sh:166` — identical line in `detect_gpus()` (sourced by all 7 setup scripts)
+- `archiso/airootfs/usr/local/bin/hyprland-install:734` — `DETECTED_AMD=$(… grep -iE 'amd|radeon|ati' …)`
+- `archiso/airootfs/usr/local/lib/setup-common.sh:167` — identical line in `detect_gpus()` (sourced by all 7 setup scripts)
 - `amd-setup`/`nvidia-setup`/`intel-setup` use `detect_gpus` from the lib (no
   private copies); `intel-setup:86` has its own *intel* regex — not affected.
   NVIDIA (`grep -i 'nvidia'`) and Intel (`intel.*(graphics|…)`) patterns have
@@ -187,7 +187,8 @@ local commit; **no push** — CI ~1h, batch at the end with Jacob's say-so).
 
 ## Status
 
-- [ ] V1 GPU regex word boundaries (installer + setup-common)
+- [x] V1 GPU regex word boundaries (installer + setup-common) — done; 10-case
+  table test passed, shellcheck clean, 2-agent review clean
 - [ ] V2 grub-install --removable + verification + README note
 - [ ] V3a online AUR per-package tolerance (+ Jacob's decision on severity)
 - [ ] V3b swapon during install + swapoff in finish/teardown (re-run s1)
