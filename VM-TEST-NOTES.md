@@ -197,7 +197,8 @@ local commit; **no push** — CI ~1h, batch at the end with Jacob's say-so).
 - [x] V3b swapon during install + swapoff in finish/teardown — done; the R3
   s1 harness no longer exists (scratchpad of a past session), so the new s5
   harness's teardown scenario covers that surface instead (full
-  teardown_target flow with swapoff-before-umount ordering asserted)
+  teardown_target flow with swapoff-before-umount ordering asserted).
+  Harness committed as `tests/s5-runner.sh` (run: `bash tests/s5-runner.sh all`)
 - [x] Cumulative diff review across V1–V3, BACKLOG closure — clean (no
   cross-section issues; V3 swapon verified compatible with V2 grub steps and
   the re-run pre-flight)
