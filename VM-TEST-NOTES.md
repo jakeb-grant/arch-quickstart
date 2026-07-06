@@ -203,6 +203,20 @@ local commit; **no push** — CI ~1h, batch at the end with Jacob's say-so).
   the re-run pre-flight)
 
 All three landed 2026-07-03 as `576f08b` (V1), `abdd5df` (V2), `175e71a`
-(V3) — local only, not pushed. Remaining real-world acceptance: next
-fresh-VM install run validates V2 (factory OVMF vars, disk-only boot) and
-V3b (install at 4G RAM should now survive the AUR builds).
+(V3); pushed 2026-07-05, ISO build run 28693998988.
+
+## Acceptance run (2026-07-05, offline ISO)
+
+Fresh 40G disk, factory-reset OVMF vars, **4G RAM**, offline ISO
+(`archlinux-custom-2026.07.04`, checksum verified):
+
+- ✅ Full encrypted install end-to-end at 4G RAM — swap activated during
+  install and released cleanly at finish (V3b lifecycle; the pre-V3 4G
+  attempt OOM'd and an active swap would have broken the final unmount).
+- ✅ **V2 closed:** vars.fd factory-reset after install (zero NVRAM boot
+  entries), disk-only boot went `EFI/BOOT/BOOTX64.EFI` → GRUB → LUKS →
+  Hyprland with dotfiles. The earlier VM-only bare-`grub>` mystery did not
+  reproduce on a clean install.
+- ⚠️ Still open: the build-OOM case that motivated V3b (yay compiling
+  `-git` packages at 4G) is not exercised by the offline ISO (prebuilt
+  packages, no compilation). Needs an online-ISO run at 4G RAM.

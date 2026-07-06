@@ -22,7 +22,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | Unscheduled | R3 fixed 2026-07-02 as installer hardening in 4 reviewed sections — see R3 entry below (L8 fixed 2026-07-02 — dotfiles.conf moved into airootfs/etc as single source of truth; R2 completed with Section 5; L3 closed by design — fork note added to README) | ✅ |
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
-| VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; unpushed) |
+| VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; pushed, ISO run 28693998988). Acceptance run 2026-07-05 (offline ISO, 4G RAM, fresh disk + factory OVMF vars): install end-to-end ✅, disk-only boot via fallback loader ✅ (V2 closed), swap activate/release lifecycle ✅ (V3b closed; online-ISO build-OOM stress not yet re-run). |
 
 ---
 
@@ -211,9 +211,9 @@ exit). Three fixes fell out — full evidence and per-item plans in
   path and falls to PXE on a bootable disk.
 - **Fix:** ✅ second `grub-install … --removable` pass (installs
   `EFI/BOOT/BOOTX64.EFI`, no NVRAM write), verification extended to require
-  the fallback loader, README note added. 2-agent review clean. Real
-  acceptance lands with the next fresh-VM install (factory OVMF vars,
-  disk-only boot must work).
+  the fallback loader, README note added. 2-agent review clean. Accepted
+  2026-07-05: fresh-VM install (offline ISO), factory OVMF vars, disk-only
+  boot reached Hyprland via `EFI/BOOT/BOOTX64.EFI` with zero NVRAM entries.
 
 ### V3. ✅ Online AUR failure tears down a finished, bootable system
 - **Where:** `hyprland-install:1494-1532` (online path) + `configure_swap`
@@ -230,6 +230,10 @@ exit). Three fixes fell out — full evidence and per-item plans in
   `teardown_target()`. Policy = never fatal (option 1). Verified by a
   9-scenario namespace harness (s5) incl. teardown swapoff-before-umount
   ordering; 2-agent review clean (stale R3-NOTES claims annotated).
+  Acceptance 2026-07-05: 4G-RAM offline install completed with swap active
+  and unmounted cleanly (V3b lifecycle ✅). Caveat: offline ISO installs
+  prebuilt AUR packages — the rustc/cc1plus build-under-OOM case still
+  needs an online-ISO run at 4G to be exercised in anger.
 
 ---
 
