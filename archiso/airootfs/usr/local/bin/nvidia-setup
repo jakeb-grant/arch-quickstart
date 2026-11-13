@@ -170,9 +170,9 @@ fi
 # Display legacy GPU warning and check requirements
 if [[ "$LEGACY_GPU" == "true" ]]; then
     echo ""
-    warn "════════════════════════════════════════════════════════════════"
+    warn "────────────────────────────────────────────────────────────────"
     warn "  LEGACY GPU DETECTED"
-    warn "════════════════════════════════════════════════════════════════"
+    warn "────────────────────────────────────────────────────────────────"
     echo ""
     echo "  NVIDIA driver 590+ no longer supports your GPU."
     echo "  The legacy nvidia-580xx driver from AUR will be installed."
@@ -185,7 +185,7 @@ if [[ "$LEGACY_GPU" == "true" ]]; then
     if ! is_offline_mode; then
         AUR_HELPER=$(get_aur_helper)
         if [[ -z "$AUR_HELPER" ]]; then
-            warn "════════════════════════════════════════════════════════════════"
+            warn "────────────────────────────────────────────────────────────────"
             echo ""
             echo "  No AUR helper found!"
             echo ""
@@ -200,7 +200,7 @@ if [[ "$LEGACY_GPU" == "true" ]]; then
         fi
         info "AUR helper found: $AUR_HELPER"
     fi
-    warn "════════════════════════════════════════════════════════════════"
+    warn "────────────────────────────────────────────────────────────────"
     echo ""
 fi
 
@@ -319,6 +319,23 @@ if [[ "$LEGACY_GPU" == "true" ]]; then
     echo "  Packages: ${OFFICIAL_PACKAGES[*]}"
     echo ""
     pkg_install "${OFFICIAL_PACKAGES[@]}"
+
+    # The official nvidia-utils and lib32-nvidia-utils conflict with the
+    # 580xx utils, and --noconfirm answers pacman's "remove?" with no, so the
+    # install would abort. They are usually there: they are the default
+    # providers of steam's vulkan-driver and lib32-vulkan-driver. Remove them
+    # first; -dd because those needs are met again by the 580xx utils'
+    # provides once they install
+    CONFLICTING_UTILS=()
+    # (pacman -Q also answers for a package that only provides the name,
+    # e.g. nvidia-580xx-utils on a re-run, so the name must match exactly)
+    for p in nvidia-utils lib32-nvidia-utils; do
+        if [[ "$(run_cmd pacman -Qq "$p" 2>/dev/null)" == "$p" ]]; then CONFLICTING_UTILS+=("$p"); fi
+    done
+    if [[ ${#CONFLICTING_UTILS[@]} -gt 0 ]]; then
+        info "Removing ${CONFLICTING_UTILS[*]} (they conflict with ${NVIDIA_UTILS_PACKAGE})..."
+        run_cmd pacman -Rdd --noconfirm "${CONFLICTING_UTILS[@]}"
+    fi
 
     # Install AUR driver packages (handles offline vs online)
     info "Installing legacy NVIDIA driver packages..."
@@ -492,8 +509,10 @@ if [[ -z "$CHROOT_TARGET" ]]; then
         echo "  - Example: prime-run steam"
         echo ""
         echo "Troubleshooting:"
-        echo "  - Multi-monitor issues? Try: env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
-        echo "  - Electron apps slow to start? Verify i915/amdgpu is BEFORE nvidia in mkinitcpio"
+        echo "  - Multi-monitor issues? Try:"
+        echo "      env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0"
+        echo "  - Electron apps slow to start? Verify i915/amdgpu is BEFORE nvidia"
+        echo "    in mkinitcpio"
         echo ""
     fi
 

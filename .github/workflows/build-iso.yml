@@ -48,7 +48,8 @@ jobs:
                    archiso/airootfs/usr/local/share/user-installs/*/install \
                    archiso/airootfs/usr/local/share/user-installs/*/fetch \
                    archiso/profiledef.sh \
-                   .github/scripts/*.sh; do
+                   .github/scripts/*.sh \
+                   tests/*.sh; do
             echo "bash -n $f"
             bash -n "$f"
           done
@@ -82,7 +83,14 @@ jobs:
             archiso/airootfs/usr/local/share/user-installs/*/fetch \
             archiso/airootfs/usr/local/lib/setup-common.sh \
             archiso/profiledef.sh \
-            .github/scripts/*.sh
+            .github/scripts/*.sh \
+            tests/glyph-lint.sh \
+            tests/s5-runner.sh
+
+      - name: Glyph lint (tty1 can draw every character)
+        # The live ISO's console font has 256 glyphs; anything outside them
+        # draws as a small square. The kit and the reasons are in the script.
+        run: bash tests/glyph-lint.sh
 
   # =============================================================================
   # Online ISO Build (Fast, smaller ISO, requires internet during installation)

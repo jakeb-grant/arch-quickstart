@@ -11,9 +11,13 @@ set -eEo pipefail
 # captured by the parent, not displayed. bash does not expand variables in
 # $BASH_COMMAND, so this cannot leak passwords. The exit pause lives in
 # on_exit below, AFTER cleanup - so a user who power-cycles at the prompt
-# instead of pressing Enter still gets a clean machine.
-trap 'echo "" >&2
-echo "ERROR: Command failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+# instead of pressing Enter still gets a clean machine. The line and command
+# are kept for the failure card (fail_card); taken on the trap's first line,
+# since $LINENO counts on through the trap's own lines.
+FAIL_LINE="" FAIL_CMD="" FAIL_MSG=""
+trap 'FAIL_LINE=$LINENO FAIL_CMD=$BASH_COMMAND
+echo "" >&2
+echo "ERROR: Command failed at line $FAIL_LINE: $FAIL_CMD" >&2' ERR
 
 # On any non-zero exit after the disk has been touched (ERR above, die(),
 # Ctrl-C), tear down mounts and the LUKS mapping so the machine is left clean
@@ -24,18 +28,29 @@ on_exit() {
     # A reflexive Ctrl-C at the error report must not truncate cleanup;
     # default handling is restored for the pause below so Ctrl-C works there
     trap '' INT TERM
-    # Never leave the dotfiles step's temporary passwordless sudo behind,
-    # whatever way the installer ends
+    # Never leave the temporary passwordless sudo (grant_install_sudo)
+    # behind, whatever way the installer ends
     if (( BASH_SUBSHELL == 0 )); then
         rm -f "$INSTALL_SUDOERS" 2>/dev/null || true
+        # Undo setup_dotfiles' screen flash, should the exit land inside it
+        if (( ${UI_TTY:-0} )); then printf '\e[?5l' 2>/dev/null || true; fi
     fi
     if (( rc != 0 && BASH_SUBSHELL == 0 )); then
         if (( DISK_TOUCHED == 1 )); then
             cleanup_on_failure
         fi
         # Keep the failure output visible; skip the pause when the user
-        # asked to leave (Ctrl-C = 130, SIGTERM = 143)
+        # asked to leave (Ctrl-C = 130, SIGTERM = 143). The card first, for
+        # a real failure only: a command that failed, or any exit once the
+        # disk was touched. A subshell that always succeeds, so it can
+        # neither stop this function nor change rc.
         if (( rc != 130 && rc != 143 )); then
+            # To stderr, under the ERROR line (stdout may be captured);
+            # only once defined (an ERR this early has nothing to card)
+            if { [[ -n ${FAIL_CMD:-} ]] || (( DISK_TOUCHED == 1 )); } \
+                    && declare -F fail_card >/dev/null; then
+                fail_card "$rc" >&2 || true
+            fi
             echo "Press Enter to exit..." >&2
             trap - INT TERM
             read -r || true
@@ -47,16 +62,55 @@ trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Colors for gum
-export GUM_CHOOSE_CURSOR_FOREGROUND="#89b4fa"
-export GUM_CHOOSE_SELECTED_FOREGROUND="#a6e3a1"
-export GUM_INPUT_CURSOR_FOREGROUND="#89b4fa"
-export GUM_INPUT_PROMPT_FOREGROUND="#cba6f7"
-export GUM_CONFIRM_PROMPT_FOREGROUND="#f9e2af"
-export GUM_SPIN_SPINNER_FOREGROUND="#89b4fa"
+# The look: the installer runs on tty1 (Linux console, 16 colours, the
+# 256-glyph ter-116n font, 80x25). Colours are ANSI indices, never hex: with
+# TERM=linux gum approximates hex to a nearby basic colour, and different
+# hexes land on the same one. Only glyphs from the shape-checked kit in
+# tests/glyph-lint.sh: anything else draws as a small square.
+#
+# Colour roles, on only when stdout is a terminal so logs stay plain:
+# C0 reset, CB bold, CDIM chrome/labels/breadcrumbs, CSEA brand/cursor,
+# CSEAB its bright partner, CYOU the user's own answers, COK done,
+# CWARN attention, CBAD errors only. Not every role is drawn yet.
+# shellcheck disable=SC2034
+if [[ -t 1 ]]; then
+    UI_TTY=1
+    C0=$'\e[0m' CB=$'\e[1m' CDIM=$'\e[90m' CSEA=$'\e[36m' CSEAB=$'\e[1;36m'
+    CYOU=$'\e[1;35m' COK=$'\e[32m' CWARN=$'\e[1;33m' CBAD=$'\e[1;31m'
+else
+    UI_TTY=0
+    C0='' CB='' CDIM='' CSEA='' CSEAB='' CYOU='' COK='' CWARN='' CBAD=''
+fi
 
-# Temporary passwordless sudo for the new user while the dotfiles apply
-# (apply_dotfiles); removed right after, and by on_exit on any exit
+# gum on the ISO is 2.0.2. Marks from the kit: ▶ cursor, · unselected,
+# ■ selected (gum's default tick is not in the font), the ASCII `line`
+# spinner (the default `dot` is braille). The Choose: header and every help
+# line are off: the help lines' arrow keys draw as filled triangles, and
+# rows are scarce at 80x25. Space does not toggle in a --no-limit list (x
+# and tab do), so that prompt's own copy says so. Padding puts prompts on
+# the 3-column gutter (confirm adds a column of its own). gum reads these
+# from the environment, so the s5 stub never sees them.
+export GUM_CHOOSE_CURSOR="▶ " GUM_CHOOSE_CURSOR_PREFIX="· "
+export GUM_CHOOSE_SELECTED_PREFIX="■ " GUM_CHOOSE_UNSELECTED_PREFIX="· "
+export GUM_FILTER_INDICATOR="▶" GUM_SPIN_SPINNER=line
+export GUM_FILTER_SELECTED_PREFIX="■ " GUM_FILTER_UNSELECTED_PREFIX="· "
+export GUM_CHOOSE_HEADER=""
+export GUM_CHOOSE_SHOW_HELP=false GUM_CONFIRM_SHOW_HELP=false
+export GUM_INPUT_SHOW_HELP=false GUM_FILTER_SHOW_HELP=false
+export GUM_CHOOSE_PADDING="0 3" GUM_INPUT_PADDING="0 3" GUM_FILTER_PADDING="0 3"
+export GUM_SPIN_PADDING="0 3" GUM_CONFIRM_PADDING="0 2"
+
+# gum colours by ANSI index, matching the roles above
+export GUM_CHOOSE_CURSOR_FOREGROUND=6 GUM_CHOOSE_SELECTED_FOREGROUND=2
+export GUM_INPUT_CURSOR_FOREGROUND=6 GUM_INPUT_PROMPT_FOREGROUND=5
+export GUM_CONFIRM_PROMPT_FOREGROUND=7 GUM_SPIN_SPINNER_FOREGROUND=6
+export GUM_CONFIRM_SELECTED_BACKGROUND=6 GUM_CONFIRM_SELECTED_FOREGROUND=0
+export GUM_CONFIRM_UNSELECTED_BACKGROUND=0 GUM_CONFIRM_UNSELECTED_FOREGROUND=7
+export GUM_FILTER_INDICATOR_FOREGROUND=6 GUM_FILTER_MATCH_FOREGROUND=5
+
+# Temporary passwordless sudo for the new user while the AUR packages build
+# and the dotfiles apply (grant_install_sudo); removed right after each, and
+# by on_exit on any exit
 INSTALL_SUDOERS="/mnt/etc/sudoers.d/90-arch-quickstart-install"
 
 # Package list location
@@ -70,9 +124,63 @@ OFFLINE_MODE=0
 # Set once partitioning begins; gates the EXIT-trap cleanup above
 DISK_TOUCHED=0
 
+# Set by review_plan: a chapter re-asked from the review keeps its earlier
+# answers as the defaults, and the disk's soft "Erase?" Cancel goes back
+REVIEWING=0
+
 # Physical offset of the swapfile, set by configure_swap and consumed by
 # configure_system for the resume= / resume_offset= kernel parameters
 RESUME_OFFSET=""
+
+# The step spine: the chapters main() walks through, in order, as id or
+# id=masthead label. The count, the welcome route and the tide all derive
+# from this list, so a new chapter is one entry here plus its `step` call.
+# Everything before `prepare` is a question, `review` the one gate to the
+# disk; from `prepare` on it runs.
+CHAPTERS=(disk you machine review "prepare=prepare disk" "base=base system"
+          system apps extras dotfiles)
+STEPS=() LABELS=()
+for _c in "${CHAPTERS[@]}"; do STEPS+=("${_c%%=*}"); LABELS+=("${_c#*=}"); done
+unset _c
+# STEP_N: the current chapter, 1-based (0 = the prologue, past the end =
+# done); STEP_SECS[n] / STEP_SKIP[n]: how long chapter n took, and whether
+# it was declined (read them as ${STEP_SECS[n]:-}: unset under set -u is
+# fatal); HEADER_N: the chapter the screen was last cleared for; BOOTABLE:
+# GRUB verified, the target boots on its own; UI_W: width()'s result
+STEP_N=0 STEP_T0=$SECONDS HEADER_N=-1 BOOTABLE=0 UI_W=0
+STEP_SECS=() STEP_SKIP=()
+# STREAM_T0: when the streamed step under way began (stream_open);
+# PKG_COUNT: packages on the target after pacstrap, "" if it can't be counted
+STREAM_T0=$SECONDS PKG_COUNT=""
+# What is left to do after the reboot, carried to the finish receipt (the
+# console keeps nothing once it clears): NOTES[i] says what, NOTE_FIXES[i]
+# the exact command, or "" when there is none (note). INSTALL_T0: when the
+# disk was first touched, "" before, so "built in" is install time, not
+# question time. DOTFILES_APPLIED: chezmoi applied cleanly.
+NOTES=() NOTE_FIXES=() INSTALL_T0="" DOTFILES_APPLIED=0
+# GREETER_OK: greetd is enabled and configured, so the receipt may say
+# Hyprland starts on its own (any greetd failure clears it); MINIMAL_SYSTEM:
+# install_base fell back to the minimal list, so there is no desktop;
+# OFFLINE_MISSING: packages the offline repo lacks; OFFLINE_CHECKED: the
+# check ran to the end (both set by validate_offline_repo)
+GREETER_OK=1 MINIMAL_SYSTEM=0 OFFLINE_MISSING=0 OFFLINE_CHECKED=0
+# GPU_PICK: the GPU line as chosen in configure_extras, before GPU_SETUP is
+# cut to the script's name; the review card reads "(hybrid)" etc. from it
+GPU_PICK=""
+# The receipt as plain text, kept on the target (install_report). REPORT_AT:
+# where the reader finds it after the reboot, "" when no copy was written
+REPORT_LOG="/mnt/var/log/arch-quickstart-install.txt"
+REPORT_NAME="install-report.txt"
+REPORT_AT=""
+
+# The step-away line, on the first screen after the gate and over the long
+# base and apps steps. True on both ISOs: from the gate to dotfiles nothing
+# prompts. pacstrap and yay run with --noconfirm, the setup scripts with
+# NONINTERACTIVE=1, the user installs through root's sudo, and the online
+# AUR builds, whose makepkg and yay call sudo as the user, under the
+# temporary NOPASSWD drop-in (grant_install_sudo). If that grant fails the
+# AUR rule leaves the line out, next to the warning that says why.
+STEP_AWAY="Nothing to answer until dotfiles. Go make a coffee."
 
 # Load configuration defaults
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -94,41 +202,337 @@ GIT_USER_EMAIL="${GIT_USER_EMAIL:-}"
 # Helper Functions
 # -----------------------------------------------------------------------------
 
-die() {
-    gum style --foreground="#f38ba8" --bold "ERROR: $1"
-    exit 1
-}
+# Status lines. Every status has its own mark, so meaning never rides on
+# colour alone: ■ done, ! attention (ASCII on purpose: the font's up
+# triangle draws as an arrow), × failed, · a breadcrumb. The installer's
+# voice starts at column 4 (a 3-space gutter); machine output stays at
+# column 0. Plain printf: no gum, so these cannot fail or die on Ctrl-C,
+# and warn stays a safe dumb print inside teardown and cleanup.
 
-info() {
-    gum style --foreground="#89b4fa" "$1"
-}
+# A question or an explanation
+info() { printf '   %s\n' "$1"; }
 
+# A dim breadcrumb, printed before a command runs
+doing() { printf '   %s· %s%s\n' "$CDIM" "$1" "$C0"; }
+
+# A message's own leading spaces (a sub-step) indent the mark, not the text
 success() {
-    gum style --foreground="#a6e3a1" "$1"
+    local ind="${1%%[! ]*}"
+    printf '   %s%s■%s %s\n' "$ind" "$COK" "$C0" "${1#"$ind"}"
 }
 
 warn() {
-    gum style --foreground="#f9e2af" "$1"
+    local ind="${1%%[! ]*}"
+    printf '   %s%s! %s%s\n' "$ind" "$CWARN" "${1#"$ind"}" "$C0"
 }
 
-header() {
+die() {
+    printf '   %s× ERROR: %s%s\n' "$CBAD" "$1" "$C0"
+    FAIL_MSG=$1
+    exit 1
+}
+
+# The user's own words, inline: printf '%s' "$(you "$HOSTNAME")"
+you() { printf '%s%s%s' "$CYOU" "$1" "$C0"; }
+
+# note WHAT [FIX]: carry a loose end to the finish receipt, next to the warn
+# that reports it: the warn scrolls away at the next clear, the note stays.
+# WHAT is short and lower case ("hyprshot didn't build"), FIX the exact
+# command to type after the reboot ("" when there is none). A note already
+# carried is not added twice. Array appends only: it cannot fail.
+note() {
+    local i
+    for i in "${!NOTES[@]}"; do
+        if [[ ${NOTES[i]} == "$1" && ${NOTE_FIXES[i]} == "${2:-}" ]]; then return 0; fi
+    done
+    NOTES+=("$1") NOTE_FIXES+=("${2:-}")
+}
+
+# warn_note TEXT: a warning with no command to fix it, carried as it is
+# (configure_system's post-GRUB writes)
+warn_note() {
+    warn "$1"
+    note "${1,}"
+}
+
+# plural N WORD [WORDS]: "1 package", "3 packages"
+plural() {
+    if (( $1 == 1 )); then printf '1 %s' "$2"; else printf '%s %s' "$1" "${3:-${2}s}"; fi
+}
+
+# fit TEXT N: TEXT cut to N characters, ending in an ellipsis when cut (and
+# no space before it); measured in characters, not bytes, whatever the locale
+fit() {
+    local LC_ALL=C.UTF-8 s="$1"
+    if (( ${#s} > $2 )); then
+        s="${s:0:$2-1}"
+        s="${s%"${s##*[! ]}"}…"
+    fi
+    printf '%s' "$s"
+}
+
+# width TEXT: TEXT's width on screen, in UI_W: characters, not bytes, with
+# colour escapes left out
+width() {
+    local LC_ALL=C.UTF-8 s="$1" re=$'\e\\[[0-9;]*m'
+    while [[ $s =~ $re ]]; do s=${s/"${BASH_REMATCH[0]}"/}; done
+    UI_W=${#s}
+}
+
+# rep N TEXT: TEXT N times (nothing when N < 1)
+rep() {
+    local s
+    (( $1 > 0 )) || return 0
+    printf -v s '%*s' "$1" ''
+    printf '%s' "${s// /$2}"
+}
+
+# fold_words BREAK INDENT WORD...: WORDs at column 6, under the text of the
+# warn line above them (after an info line, two in from its text: a
+# sub-list), folded between words so no line passes 79 columns on tty1 (a
+# long package list would otherwise wrap mid-name).
+# BREAK ends each folded line, INDENT starts the next. Plain printf: it
+# cannot fail, or die on Ctrl-C as gum can.
+fold_words() {
+    local brk="$1" indent="$2" line="     $3" word
+    shift 3
+    for word in "$@"; do
+        if (( ${#line} + 1 + ${#word} + ${#brk} > 79 )); then
+            printf '%s%s\n' "$line" "$brk"
+            line="$indent$word"
+        else
+            line+=" $word"
+        fi
+    done
+    printf '%s\n' "$line"
+}
+
+# print_cmd WORD...: a command to type after rebooting (a retry hint).
+# Folded lines end in " \", so it still pastes as one command.
+print_cmd() { fold_words ' \' '         ' "$@"; }
+
+# print_words WORD...: a list of names, folded the same way.
+print_words() { fold_words '' '     ' "$@"; }
+
+# dur SECS: a duration as it reads on screen: 41s, 3m 41s, 1h 02m
+dur() {
+    local s=$1
+    if (( s < 60 )); then
+        printf '%ds' "$s"
+    elif (( s < 3600 )); then
+        printf '%dm %02ds' $(( s / 60 )) $(( s % 60 ))
+    else
+        printf '%dh %02dm' $(( s / 3600 )) $(( s % 3600 / 60 ))
+    fi
+}
+
+# commas N: N with thousands separators (1284 is 1,284), whatever the locale
+commas() {
+    local n=$1 re='^([0-9]+)([0-9]{3})'
+    while [[ $n =~ $re ]]; do
+        n="${BASH_REMATCH[1]},${BASH_REMATCH[2]}${n:${#BASH_REMATCH[0]}}"
+    done
+    printf '%s' "$n"
+}
+
+# Stream frames. A streamed step (pacstrap, the AUR builds, the user
+# installs, chezmoi) stays attached to the terminal and its output runs flush
+# left, untouched: these print a rule before the command and one after it,
+# never around it. If the command fails under set -e, the closing rule never
+# prints and the ERR line follows the opening one, which reads right.
+#
+# stream_open LABEL [HINT...]: the opening rule, 79 columns, then each HINT
+# (what is normal here) as a dim line; an empty HINT is left out. Starts the
+# clock stream_close reads.
+stream_open() {
+    local h
+    STREAM_T0=$SECONDS
+    width "$1"
+    printf '   %s── %s%s%s %s live output ──%s\n' "$CDIM" "$CSEAB" "$1" "$CDIM" \
+        "$(rep $(( 57 - UI_W )) '─')" "$C0"
+    for h in "${@:2}"; do
+        if [[ -n $h ]]; then printf '   %s%s%s\n' "$CDIM" "$h" "$C0"; fi
+    done
+}
+
+# stream_close ok|note TEXT: the closing rule, the outcome (■ for ok, ! for
+# note) and the time since stream_open. On the success path TEXT must never
+# say "failed" or "skipped": the s5 scenarios want_not them.
+stream_close() {
+    local mark="${COK}■" t
+    if [[ $1 != ok ]]; then mark="${CWARN}!"; fi
+    t=$(dur $(( SECONDS - STREAM_T0 )))
+    width "$2"
+    printf '   %s── %s%s %s %s%s %s ──%s\n' "$CDIM" "$mark" "$C0" "$2" "$CDIM" \
+        "$(rep $(( 66 - UI_W - ${#t} )) '─')" "$t" "$C0"
+}
+
+# pkg_rule KIND I N NAME: a light rule before each package of a streamed
+# loop (yay keeps no count of its own): ── AUR 3/24 · hyprshot ──. NAME is
+# cut to the room the rest leaves in 79 columns (14 is the rule's own).
+pkg_rule() {
+    local room=$(( 79 - 14 - ${#1} - ${#2} - ${#3} ))
+    printf '   %s── %s %s/%s · %s%s%s ──%s\n' "$CDIM" "$1" "$2" "$3" "$C0" \
+        "$(fit "$4" "$room")" "$CDIM" "$C0"
+}
+
+# apps_note AWAY: the reassurance for the apps rules, where yay's red ==>
+# lines could look like disaster: "orion already boots." once GRUB is
+# verified, then with AWAY=1 "Nothing to answer until dotfiles.". Empty when
+# neither holds.
+apps_note() {
+    local s=""
+    if (( BOOTABLE )); then s="$(fit "${HOSTNAME:-The system}" 24) already boots."; fi
+    if (( $1 )); then s+="${s:+ }Nothing to answer until dotfiles."; fi
+    printf '%s' "$s"
+}
+
+# box LINE...: a card in a single-line border (the only kind the console
+# font has), 74 columns on the gutter. Each LINE fits in 70 columns, colour
+# escapes allowed; callers cut user-supplied names to fit. "" is a blank row.
+# The border is sea, or BOX_C when the caller sets it (a local: fail_card).
+box() {
+    local l c=${BOX_C:-$CSEA}
+    printf '   %s┌%s┐%s\n' "$c" "$(rep 72 '─')" "$C0"
+    for l in "$@"; do
+        width "$l"
+        printf '   %s│%s %s%s %s│%s\n' "$c" "$C0" "$l" \
+            "$(rep $(( 70 - UI_W )) ' ')" "$c" "$C0"
+    done
+    printf '   %s└%s┘%s\n' "$c" "$(rep 72 '─')" "$C0"
+}
+
+# The console's own palette (OSC P), set once on tty1: the screen turns
+# ink-dark the moment the installer starts, and the colour roles above land
+# exactly. TERM=linux only: on xterm-likes an unterminated OSC P eats
+# output. Left set at exit, which is fine on a live ISO (printf '\e]R'
+# resets it). Without it the default VGA palette still keeps the roles.
+console_palette() {
+    [[ ${TERM:-} == linux ]] && (( UI_TTY )) || return 0
+    local i=0 c
+    for c in 101418 f0635a 8fcf6b f2c14e 5a9bd8 ff9e64 4fd1c5 d8d3c4 \
+             6b7585 ff8a80 b5e48c ffe08a 8ec5ff ffb38a 8af0e4 fbf7ec; do
+        printf '\e]P%X%s' "$i" "$c"
+        i=$((i + 1))    # not ((i++)): status 1 at 0 under set -e
+    done
     clear
-    gum style \
-        --border double \
-        --border-foreground="#cba6f7" \
-        --padding "1 2" \
-        --margin "1" \
-        --align center \
-        --bold \
-        "Hyprland Arch Installer"
-    echo
+}
+
+# step ID: main() calls it before each chapter. It records how long the
+# chapter before took and moves the spine on; an id not in STEPS (done)
+# lands past the end. Plain tests in if, so set -e and ERR never see a 1.
+step() {
+    local i n=$(( ${#STEPS[@]} + 1 ))
+    for i in "${!STEPS[@]}"; do
+        if [[ ${STEPS[i]} == "$1" ]]; then n=$(( i + 1 )); fi
+    done
+    if (( STEP_N > 0 )); then STEP_SECS[STEP_N]=$(( SECONDS - STEP_T0 )); fi
+    STEP_N=$n STEP_T0=$SECONDS
+}
+
+# step_skip: the current chapter was declined (setup_dotfiles' skip paths)
+step_skip() { STEP_SKIP[STEP_N]=1; }
+
+# tide LO HI [W]: a line of water W cells wide (78 by default), no newline.
+# Cells before LO roll as a wave in sea, LO to HI crest in bright sea (the
+# chapter under way), the rest lies calm and dim. The shape carries the
+# progress, so it reads without colour too. Period 10: broad swells on the
+# console's four scan-line glyphs (a shorter one draws as dashes).
+tide() {
+    local wave=(⎽ ⎽ ⎽ ⎼ ⎻ ⎺ ⎺ ⎺ ⎻ ⎼) w=${3:-78} i s=$CSEA
+    for (( i = 0; i < w; i++ )); do
+        if (( i == $1 )); then s+=$CSEAB; fi
+        if (( i == $2 )); then s+=$C0$CDIM; fi
+        if (( i < $2 )); then s+=${wave[i % 10]}; else s+='⎽'; fi
+    done
+    printf '%s%s' "$s" "$C0"
+}
+
+# masthead: three rows, the brand on the left and the chapter on the right
+# (79 columns, clear of the last-column wrap), the tide under them, a blank.
+masthead() {
+    local n=$STEP_N t=${#STEPS[@]} left right lo=0 hi=0 lw rw room l rmax=0
+    left="${CSEA}◆${C0} ${CB}arch quickstart${C0}"
+    if (( n == 0 )); then
+        right="${CDIM}hyprland on arch${C0}"
+    elif (( n > t )); then
+        right="${CDIM}done${C0}" lo=78 hi=78
+    else
+        right="${CDIM}$n of $t · ${CSEAB}${LABELS[n-1]}${C0}"
+        lo=$(( 78 * (n - 1) / t )) hi=$(( 78 * n / t ))
+    fi
+    width "$left"; lw=$UI_W
+    width "$right"; rw=$UI_W
+    # Once GRUB is verified: "■ HOST boots on its own", HOST cut to the room
+    # left (hostnames run to 63 characters), the note dropped if even a cut
+    # one will not fit. 21 is the note without HOST, 2 the gap before right.
+    # The room is the widest chapter label's, so HOST reads the same in
+    # every chapter.
+    if (( BOOTABLE )); then
+        for l in "${LABELS[@]}"; do
+            width "$t of $t · $l"
+            if (( UI_W > rmax )); then rmax=$UI_W; fi
+        done
+        if (( rw > rmax )); then rmax=$rw; fi
+        room=$(( 78 - lw - 21 - 2 - rmax ))
+        if (( room >= 3 )); then
+            left+="  ${COK}■ $(fit "${HOSTNAME:-archlinux}" "$room") boots on its own${C0}"
+            width "$left"; lw=$UI_W
+        fi
+    fi
+    printf ' %s%s%s\n ' "$left" "$(rep $(( 78 - lw - rw )) ' ')" "$right"
+    tide "$lo" "$hi"
+    printf '\n\n'
+}
+
+# The top of every screen. Before the disk is touched every screen is a
+# question and starts clean (which also suits the review loop and the
+# connect_wifi re-asks). After that only a new chapter clears: partition,
+# format and mount build one screen, and a warning stays up while the next
+# step runs (the console has no scrollback since Linux 5.9).
+header() {
+    if (( DISK_TOUCHED == 0 || STEP_N != HEADER_N )); then
+        clear
+        if (( UI_TTY )); then printf '\e[?5l'; fi    # undo a screen flash
+        masthead
+    else
+        echo
+    fi
+    HEADER_N=$STEP_N
+}
+
+# The two short animations (the welcome wordmark, the finish tide) play on
+# the real console only: never into a log, a pipe or another terminal
+ui_anim() { (( UI_TTY )) && [[ ${TERM:-} == linux ]]; }
+
+# tide_roll: on the finish screen, right after its masthead, roll the tide
+# in from the last chapter's edge to full: six frames redrawn in place
+tide_roll() {
+    ui_anim || return 0
+    local t=${#STEPS[@]} f lo hi
+    lo=$(( 78 * (t - 1) / t ))
+    for f in 0 1 2 3 4 5; do
+        hi=$(( lo + (78 - lo) * f / 5 ))
+        printf '\e[2A\r '
+        if (( f == 5 )); then tide 78 78; else tide "$lo" "$hi"; fi
+        printf '\e[2B\r'
+        if (( f < 5 )); then sleep 0.05; fi
+    done
 }
 
 # Clean user cancel: no scary error report. Cleanup still runs via the EXIT
-# trap once the disk has been touched; 130 also skips the exit pause.
+# trap once the disk has been touched (its own lines follow this one); 130
+# also skips the exit pause. No wrapper prompt runs after the gate (the
+# typed name in erase_gate is the last before the disk is touched), so
+# the DISK_TOUCHED branch is a guard, not a path anyone sees.
 cancelled() {
-    echo "" >&2
-    warn "Installation cancelled."
+    echo ""
+    if (( DISK_TOUCHED == 1 )); then
+        warn "Stopped. Cleaning up the partly written disk..."
+    else
+        warn "Stopped. Nothing was written to any disk."
+        info "Run hyprland-install whenever you're ready."
+    fi
     exit 130
 }
 
@@ -164,9 +568,11 @@ prompt_filter() {
     printf -v "$__var" '%s' "$__val"
 }
 
-# gum confirm wrapper: yes = 0, no = 1, Ctrl-C (and Esc on newer gum) = 130 =
-# clean cancel. Must be called in a condition context (if/&&/||) like gum
-# confirm itself.
+# gum confirm wrapper: yes = 0, no = 1, Ctrl-C = 130 = clean cancel. Esc is
+# not a cancel here: gum 2.0.2's confirm returns 1 for it, the same as "no"
+# (choose and input return 1 on Esc too, which their wrappers above treat as
+# cancel). Must be called in a condition context (if/&&/||) like gum confirm
+# itself.
 confirm() {
     local rc=0
     gum confirm "$@" || rc=$?
@@ -189,6 +595,28 @@ read_package_list() {
             printf '%s\n' "$line"
         fi
     done < "$file"
+}
+
+# Temporary passwordless sudo for the new user in the target, for a step whose
+# commands call sudo as that user (AUR builds, the dotfiles' scripts) and may
+# outlast sudo's password timeout. Returns non-zero, with nothing left
+# behind, if the drop-in cannot be written or does not validate; the caller
+# warns and carries on. Pair every grant with revoke_install_sudo.
+grant_install_sudo() {
+    if ! { printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$USERNAME" > "$INSTALL_SUDOERS" \
+            && chmod 440 "$INSTALL_SUDOERS" \
+            && arch-chroot /mnt visudo -cf "${INSTALL_SUDOERS#/mnt}" >/dev/null; }; then
+        rm -f "$INSTALL_SUDOERS" || true
+        return 1
+    fi
+}
+
+revoke_install_sudo() {
+    if ! rm -f "$INSTALL_SUDOERS"; then
+        warn "Could not remove the temporary passwordless sudo rule."
+        warn "After rebooting, delete ${INSTALL_SUDOERS#/mnt}"
+        note "the temporary sudo rule is still there" "sudo rm ${INSTALL_SUDOERS#/mnt}"
+    fi
 }
 
 # Best-effort teardown of the install target: unmount the /mnt tree and close
@@ -255,6 +683,78 @@ cleanup_on_failure() {
     fi
 }
 
+# fail_card RC: on_exit's card for a failed run, after cleanup and before the
+# pause: where it stopped, what failed, what that usually means, the disk's
+# state and what to do next. The ERROR line above it stays first and
+# verbatim. A subshell with errexit, ERR and the signals off, plain printf
+# only (never gum): it cannot fail, stop on_exit or change the exit code.
+fail_card() (
+    set +e
+    trap - ERR
+    trap '' INT TERM
+    local n=${STEP_N:-0} t=${#STEPS[@]} id="" where what why disk next host
+    local BOX_C=$CBAD    # box()'s border: coral, errors only
+    if (( n >= 1 && n <= t )); then
+        id=${STEPS[n-1]} where="$n of $t · ${LABELS[n-1]}"
+    elif (( n > t )); then
+        where="the finish"
+    else
+        where="the start"
+    fi
+    if [[ -n ${FAIL_CMD:-} ]]; then
+        # Its first line only: a heredoc's BASH_COMMAND carries the body,
+        # and a newline would break the box's row
+        what="line ${FAIL_LINE:-?}: ${FAIL_CMD%%$'\n'*}"
+    else
+        what=${FAIL_MSG:-exit code $1}
+    fi
+    host=$(fit "${HOSTNAME:-the system}" 20)
+    case $id in
+        prepare) why="the disk is busy, failing, or smaller than it says" ;;
+        base)    if (( ${OFFLINE_MODE:-0} )); then
+                     why="a package on this stick did not install"
+                 else
+                     why="a download failed: check the network"
+                 fi ;;
+        # Before GRUB the chapter also sets up the swapfile, the locale and
+        # the users: the guess goes by what failed
+        system)  if (( ${BOOTABLE:-0} )); then
+                     why="a late setup step: the lines above say what"
+                 elif [[ ${what,,} == *@(grub|mkinitcpio|initramfs|hooks|kernel)* ]]; then
+                     why="the boot loader or initramfs could not be set up"
+                 elif [[ ${what,,} == *swap* ]]; then
+                     why="the swapfile could not be set up"
+                 else
+                     why="a system setup step: the lines above say what"
+                 fi ;;
+        *)       if (( DISK_TOUCHED )); then
+                     why="something unexpected: the lines above say what"
+                 else
+                     why="a check failed before anything was written"
+                 fi ;;
+    esac
+    if (( ! DISK_TOUCHED )); then
+        disk="nothing was written to any disk"
+        next="run hyprland-install again when ready"
+    elif mountpoint -q /mnt 2>/dev/null || [[ -e /dev/mapper/cryptroot ]]; then
+        disk="$(fit "${DISK:-the disk}" 24) is still mounted"
+        next="unmount it as the lines above say, then re-run"
+    elif (( ${BOOTABLE:-0} )); then
+        disk="$host already boots on its own"
+        next="reboot into it, or re-run to start over"
+    else
+        disk="$(fit "${DISK:-the disk}" 24) may be partly written, now unmounted"
+        next="safe to re-run: hyprland-install starts it over"
+    fi
+    echo
+    box "${CBAD}× stopped at $(fit "$where" 56)${C0}" \
+        "${CDIM}failed${C0}   $(fit "$what" 61)" \
+        "${CDIM}usually${C0}  $why" \
+        "${CDIM}disk${C0}     $disk" \
+        "${CDIM}next${C0}     $next"
+    true
+)
+
 # -----------------------------------------------------------------------------
 # Offline Mode Detection
 # -----------------------------------------------------------------------------
@@ -318,10 +818,10 @@ validate_offline_repo() {
 
     # Report results
     if [[ ${#missing_packages[@]} -gt 0 ]]; then
-        warn "WARNING: ${#missing_packages[@]} packages missing from offline repository:"
+        warn "$(plural ${#missing_packages[@]} package) missing from the offline repository:"
         echo
         for pkg in "${missing_packages[@]}"; do
-            echo "  - $pkg"
+            echo "     - $pkg"
         done
         echo
         warn "These packages will fail to install in offline mode."
@@ -329,10 +829,13 @@ validate_offline_repo() {
         if ! confirm --default=false "Continue anyway?"; then
             die "Installation cancelled - offline repository incomplete"
         fi
+        note "$(plural ${#missing_packages[@]} 'package was' 'packages were') missing from the ISO"
+        OFFLINE_MISSING=${#missing_packages[@]}
     else
-        success "All required packages found in offline repository!"
+        success "All required packages found in the offline repository"
         sleep 1
     fi
+    OFFLINE_CHECKED=1
 }
 
 # -----------------------------------------------------------------------------
@@ -373,15 +876,21 @@ check_network() {
 
     # In offline mode, network is optional (only needed for dotfiles)
     if [[ "$OFFLINE_MODE" -eq 1 ]]; then
-        success "Offline mode: All packages are pre-installed on this ISO"
+        if (( OFFLINE_MISSING )); then
+            warn "Offline ISO: $(plural "$OFFLINE_MISSING" package) not on this stick"
+        elif (( OFFLINE_CHECKED )); then
+            success "Offline ISO: every package is already on this stick"
+        else
+            info "Offline ISO: packages come from this stick (not checked)"
+        fi
         echo
-        info "Checking network connectivity (optional for dotfiles)..."
+        info "Checking the network (optional here)..."
         echo
 
         if test_network; then
-            success "Network connected! (dotfiles setup will be available)"
+            success "Network connected"
         else
-            warn "No network connection - dotfiles setup will be skipped"
+            warn "No network. The install doesn't need it; only remote dotfiles would."
         fi
         sleep 2
         return 0
@@ -393,7 +902,7 @@ check_network() {
 
     # Test internet connectivity
     if test_network; then
-        success "Network connected!"
+        success "Network connected"
         sleep 1
         return 0
     fi
@@ -404,7 +913,7 @@ check_network() {
     if bring_up_ethernet; then
         sleep 2
         if test_network; then
-            success "Network connected!"
+            success "Network connected"
             sleep 1
             return 0
         fi
@@ -421,7 +930,7 @@ check_network() {
             die "Internet connection required for installation."
         fi
     else
-        die "No network connection. Please check your network settings and restart."
+        die "No network connection. Check your network settings and restart."
     fi
 }
 
@@ -441,7 +950,7 @@ connect_wifi() {
     wifi_device=$(iwctl device list 2>/dev/null | awk '/station/{print $2}' | head -1 || true)
 
     if [[ -z "$wifi_device" ]]; then
-        die "No WiFi device found!"
+        die "No WiFi device found."
     fi
 
     # Scan for networks
@@ -479,7 +988,7 @@ connect_wifi() {
     fi
 
     if [[ -z "$networks" ]]; then
-        die "No WiFi networks found!"
+        die "No WiFi networks found."
     fi
 
     info "Select WiFi network:"
@@ -487,7 +996,7 @@ connect_wifi() {
     prompt_choose ssid --height=15 < <(echo "$networks")
 
     if [[ -z "$ssid" ]]; then
-        die "No network selected!"
+        die "No network selected."
     fi
 
     info "Enter password for '$ssid':"
@@ -498,7 +1007,7 @@ connect_wifi() {
     if iwctl --passphrase "$wifi_password" station "$wifi_device" connect "$ssid" 2>&1; then
         sleep 2
         if test_network; then
-            success "Connected to WiFi!"
+            success "Connected to WiFi"
             sleep 1
             return 0
         fi
@@ -516,29 +1025,85 @@ connect_wifi() {
 # Welcome Screen
 # -----------------------------------------------------------------------------
 
+# The one screen with room to spare, so it gets the full identity and no
+# masthead: the wordmark on the water with its reflection, what is about to
+# happen, and the chapters split at the point where the questions end and
+# the disk is touched. 23 rows offline, 21 online: it fits 80x25 with gum
+# confirm's help line hidden.
 welcome() {
-    header
+    local mark=(
+        ' ███  █   █ ███  ████ █   █  ████ █████  ███  ████  █████'
+        '█   █ █   █  █  █     █  █  █       █   █   █ █   █   █'
+        '█   █ █   █  █  █     ███    ███    █   █████ ████    █'
+        '█  █  █   █  █  █     █  █      █   █   █   █ █  █    █'
+        ' ██ █  ███  ███  ████ █   █ ████    █   █   █ █   █   █'
+    )
+    local i f k s c asks=() runs=() gate=${#STEPS[@]} sep=" $CDIM·$C0 "
 
-    # Show installation mode
+    clear
+    echo
+    if ui_anim; then
+        # The wordmark rises out of the water: calm water first, then the
+        # letters come up a row at a time, their reflection under them.
+        # Drawn upward from below the reflection (row 10 of the screen).
+        printf '\n\n\n\n\n    '
+        tide 58 58 58
+        printf '\n\n\n'
+        for f in 1 2 3 4 5; do
+            sleep 0.05
+            s=''
+            for i in 1 2 3 4 5; do              # screen row 1 + i
+                k=$(( i - 5 + f ))
+                s+=$'\e['"$(( 9 - i ))A"$'\r\e[K'
+                if (( k >= 1 )); then s+="    $CSEAB${mark[k-1]}$C0"; fi
+                s+=$'\r\e['"$(( 9 - i ))B"
+            done
+            for i in 1 2; do                    # screen row 7 + i
+                k=$(( f + 1 - i ))
+                s+=$'\e['"$(( 3 - i ))A"$'\r\e[K'
+                if (( k >= 1 )); then s+="    $CDIM${mark[k-1]//█/░}$C0"; fi
+                s+=$'\r\e['"$(( 3 - i ))B"
+            done
+            printf '%s' "$s"
+        done
+    else
+        for i in 0 1 2 3 4; do printf '    %s%s%s\n' "$CSEAB" "${mark[i]}" "$C0"; done
+        printf '    '
+        tide 58 58 58
+        printf '\n    %s%s%s\n' "$CDIM" "${mark[4]//█/░}" "$C0"
+        printf '    %s%s%s\n' "$CDIM" "${mark[3]//█/░}" "$C0"
+    fi
+    echo
+
+    info "Hi. Let's build you a Hyprland desktop on Arch Linux."
+    echo
+    info "You answer a few questions, then it does the heavy lifting."
+    info "Nothing touches a disk until you type its name on the review screen."
+    echo
+
+    # The route, from the spine: the questions, then from prepare on, the run
+    for i in "${!STEPS[@]}"; do
+        if [[ ${STEPS[i]} == prepare ]]; then gate=$i; break; fi
+    done
+    asks=("${STEPS[@]:0:gate}") runs=("${STEPS[@]:gate}")
+    s=''
+    for c in "${asks[@]}"; do s+="${s:+$sep}$c"; done
+    printf '   %s%-11s%s %s\n' "$CDIM" "you answer" "$C0" "$s"
+    s=''
+    for c in "${runs[@]}"; do s+="${s:+$sep}$c"; done
+    printf '   %s%-11s%s %s\n' "$CDIM" "then" "$C0" "$s"
+    echo
+
+    # Nothing is checked yet (validate_offline_repo comes next and counts
+    # what is missing), so this line claims no more than where they come from
     if [[ "$OFFLINE_MODE" -eq 1 ]]; then
-        gum style \
-            --foreground="#a6e3a1" \
-            --bold \
-            --padding "0 2" \
-            "OFFLINE MODE - All packages pre-installed on ISO"
+        printf '   %s◆%s offline ISO   %sthe packages install from this stick%s\n' \
+            "$CSEA" "$C0" "$CDIM" "$C0"
         echo
     fi
 
-    gum style \
-        --padding "1 2" \
-        --margin "0 2" \
-        "Welcome to the Hyprland Arch Linux installer!" \
-        "" \
-        "This will install a clean Arch Linux system with Hyprland."
-
-    echo
-    if ! confirm "Ready to proceed?"; then
-        gum style --foreground="#f9e2af" "Installation cancelled."
+    if ! confirm --affirmative="Let's go" --negative="Not now" "Ready?"; then
+        info "No problem, nothing was changed. Run hyprland-install when you're ready."
         exit 0
     fi
 }
@@ -574,43 +1139,50 @@ select_disk() {
         | sort || true)
 
     if [[ ${#disks[@]} -eq 0 ]]; then
-        die "No suitable disks found!"
+        die "No suitable disks found."
     fi
     # Only mention the exclusion when the boot medium would otherwise have
     # been offered (not e.g. an optical drive the regex never lists)
     if [[ "$boot_disk" =~ ^/dev/(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|mmcblk[0-9]+)$ ]]; then
-        info "(not listing $boot_disk - it is the installer boot medium)"
+        doing "$boot_disk is the stick you booted from, so it isn't listed"
         echo
     fi
 
-    gum style --foreground="#cba6f7" "Select the target disk for installation:"
+    info "Which disk becomes the new system?"
     echo
 
-    prompt_choose DISK --height=10 < <(printf '%s\n' "${disks[@]}")
+    # From the review the cursor starts on the disk picked before (gum
+    # splits --selected on commas, so a comma in a model name is escaped)
+    local line sel=()
+    for line in "${disks[@]}"; do
+        if [[ -n ${DISK:-} && $line == "$DISK "* ]]; then sel=("--selected=${line//,/\\,}"); fi
+    done
+    prompt_choose DISK --height=10 "${sel[@]}" < <(printf '%s\n' "${disks[@]}")
     DISK=$(echo "$DISK" | awk '{print $1}')
 
     if [[ -z "$DISK" ]]; then
-        die "No disk selected!"
+        die "No disk selected."
     fi
 
+    # Flat at danger: coral, exact, nothing playful
     echo
-    warn "WARNING: All data on $DISK will be destroyed!"
+    printf '   %s! Everything on %s will be erased. There is no undo.%s\n' \
+        "$CBAD" "$DISK" "$C0"
     echo
 
     lsblk "$DISK"
     echo
 
-    if ! confirm --default=false "Are you sure you want to erase $DISK?"; then
+    # A soft check only: the gate is the typed name in review_plan. From
+    # the review, Cancel goes back to it (DISK empty: review_plan keeps the
+    # disk it had)
+    if ! confirm --default=false --affirmative="Erase it" --negative="Cancel" \
+            "Erase $DISK?"; then
+        if (( REVIEWING )); then
+            DISK=""
+            return 0
+        fi
         die "Installation cancelled by user."
-    fi
-
-    # Double confirmation for safety
-    echo
-    gum style --foreground="#f38ba8" "Type 'yes' to confirm disk erasure:"
-    prompt_input CONFIRM --placeholder "Type 'yes' to confirm"
-
-    if [[ "$CONFIRM" != "yes" ]]; then
-        die "Installation cancelled."
     fi
 }
 
@@ -618,79 +1190,106 @@ select_disk() {
 # User Configuration
 # -----------------------------------------------------------------------------
 
+# ask_secret VAR PLACEHOLDER CONFIRM_PLACEHOLDER CONFIRM_LINE EMPTY_MSG
+# MISMATCH_MSG: a password or passphrase typed twice, into VAR. Empty, or
+# two that differ, re-ask (three tries, then the old die); all of it before
+# any disk is touched. Esc cancels through prompt_input.
+ask_secret() {
+    local __as_var=$1 __as_a __as_b __as_try
+    for __as_try in 1 2 3; do
+        prompt_input __as_a --password --placeholder "$2"
+        if [[ -z $__as_a ]]; then
+            (( __as_try < 3 )) || die "$5"
+            warn "That was empty. Try again (Esc cancels)."
+            continue
+        fi
+        info "$4"
+        prompt_input __as_b --password --placeholder "$3"
+        if [[ $__as_a == "$__as_b" ]]; then
+            printf -v "$__as_var" '%s' "$__as_a"
+            return 0
+        fi
+        (( __as_try < 3 )) || die "$6"
+        warn "Those didn't match. Try again (Esc cancels)."
+    done
+}
+
 configure_user() {
     header
-    gum style --foreground="#cba6f7" "Configure your system:"
+    info "Who's this machine for?"
     echo
 
+    # Pre-filled with the defaults, or from the review with the answers
+    # already given, so Enter keeps each one (bash sets HOSTNAME itself:
+    # the live ISO's, never a default on the first pass). The passwords are
+    # typed again: they are never shown.
+    local host_v=${DEFAULT_HOSTNAME:-archlinux} user_v=$DEFAULT_USERNAME
+    local enc_v=false same_v=true tz_v=$DEFAULT_TIMEZONE tz_q
+    if (( REVIEWING )); then
+        host_v=${HOSTNAME:-$host_v} user_v=${USERNAME:-$user_v}
+        if [[ ${ENCRYPT_DISK:-} == yes ]]; then
+            enc_v=true
+            if [[ ${ENCRYPT_PASSWORD:-} != "${PASSWORD:-}" ]]; then same_v=false; fi
+        fi
+        tz_v=${TIMEZONE:-$tz_v}
+    fi
+
     # Hostname
-    info "Enter hostname:"
-    prompt_input HOSTNAME --placeholder "archlinux" --value "${DEFAULT_HOSTNAME:-archlinux}"
+    info "Name this machine"
+    prompt_input HOSTNAME --placeholder "archlinux" --value "$host_v"
     HOSTNAME=${HOSTNAME:-archlinux}
 
     echo
 
-    # Username - pre-filled with default
-    info "Enter username:"
-    prompt_input USERNAME --placeholder "$DEFAULT_USERNAME" --value "$DEFAULT_USERNAME"
+    # Username
+    info "Your username"
+    prompt_input USERNAME --placeholder "$DEFAULT_USERNAME" --value "$user_v"
     USERNAME=${USERNAME:-$DEFAULT_USERNAME}
 
     if [[ -z "$USERNAME" ]]; then
-        die "Username cannot be empty!"
+        die "Username cannot be empty."
     fi
 
     echo
 
     # Password - must be entered
-    info "Enter password for $USERNAME:"
-    prompt_input PASSWORD --password --placeholder "Password"
-
-    if [[ -z "$PASSWORD" ]]; then
-        die "Password cannot be empty!"
-    fi
-
-    info "Confirm password:"
-    prompt_input PASSWORD_CONFIRM --password --placeholder "Confirm password"
-
-    if [[ "$PASSWORD" != "$PASSWORD_CONFIRM" ]]; then
-        die "Passwords do not match!"
-    fi
+    info "A password for $(fit "$USERNAME" 32)"
+    ask_secret PASSWORD "Password" "Confirm password" "Once more, to confirm" \
+        "Password cannot be empty." "Passwords do not match."
 
     echo
 
     # Disk encryption
     ENCRYPT_DISK="no"
     ENCRYPT_PASSWORD=""
-    info "Disk encryption (LUKS):"
-    if confirm --default=false "Enable full disk encryption?"; then
+    if confirm --default="$enc_v" "Encrypt the disk? You'll type a passphrase at every boot."; then
         ENCRYPT_DISK="yes"
-        if confirm "Use the same password for encryption?"; then
+        if confirm --default="$same_v" "Use the same password for encryption?"; then
             ENCRYPT_PASSWORD="$PASSWORD"
         else
             info "Enter encryption passphrase:"
-            prompt_input ENCRYPT_PASSWORD --password --placeholder "Encryption passphrase"
-            if [[ -z "$ENCRYPT_PASSWORD" ]]; then
-                die "Encryption passphrase cannot be empty!"
-            fi
-            info "Confirm encryption passphrase:"
-            local encrypt_confirm
-            prompt_input encrypt_confirm --password --placeholder "Confirm passphrase"
-            if [[ "$ENCRYPT_PASSWORD" != "$encrypt_confirm" ]]; then
-                die "Encryption passphrases do not match!"
-            fi
+            ask_secret ENCRYPT_PASSWORD "Encryption passphrase" "Confirm passphrase" \
+                "Confirm encryption passphrase:" \
+                "Encryption passphrase cannot be empty." \
+                "Encryption passphrases do not match."
         fi
     fi
 
     echo
 
-    # Timezone - pre-filled with default, option to change
-    info "Timezone (default: $DEFAULT_TIMEZONE):"
-    if confirm "Use default timezone ($DEFAULT_TIMEZONE)?"; then
-        TIMEZONE="$DEFAULT_TIMEZONE"
+    # Timezone: yes keeps the default, or from the review the one chosen
+    info "Timezone:"
+    if [[ $tz_v == "$DEFAULT_TIMEZONE" ]]; then
+        tz_q="Use default timezone ($tz_v)?"
+    else
+        tz_q="Keep timezone ($tz_v)?"
+    fi
+    if confirm "$tz_q"; then
+        TIMEZONE="$tz_v"
     else
         prompt_filter TIMEZONE --height=15 --placeholder="Search timezone..." --value="America/" \
             < <(find /usr/share/zoneinfo -type f | sed 's|/usr/share/zoneinfo/||' | grep -E '^(America|Europe|Asia|Australia|Pacific)' | sort)
-        TIMEZONE=${TIMEZONE:-$DEFAULT_TIMEZONE}
+        TIMEZONE=${TIMEZONE:-$tz_v}
     fi
 
     echo
@@ -702,23 +1301,7 @@ configure_user() {
 
     info "  Git email:"
     prompt_input GIT_USER_EMAIL --placeholder "Git email" --value "$GIT_USER_EMAIL"
-
-    echo
-    success "Configuration summary:"
-    echo "  Machine:    $HOSTNAME"
-    echo "  Username:   $USERNAME"
-    echo "  Encryption: $ENCRYPT_DISK"
-    echo "  Timezone:   $TIMEZONE"
-    echo "  Locale:     $DEFAULT_LOCALE"
-    echo "  Keymap:     $DEFAULT_KEYMAP"
-    if [[ -n "$GIT_USER_NAME" ]]; then
-        echo "  Git user:   $GIT_USER_NAME <$GIT_USER_EMAIL>"
-    fi
-    echo
-
-    if ! confirm "Proceed with these settings?"; then
-        configure_user
-    fi
+    # No summary here: review_plan shows every answer on one card
 }
 
 # -----------------------------------------------------------------------------
@@ -727,7 +1310,7 @@ configure_user() {
 
 configure_extras() {
     header
-    gum style --foreground="#cba6f7" "Configure additional system settings:"
+    info "Configure additional system settings:"
     echo
 
     # -------------------------------------------------------------------------
@@ -754,21 +1337,23 @@ configure_extras() {
         fi
     fi
 
-    # Display detected hardware
-    gum style --foreground="#89b4fa" "Detected graphics hardware:"
-    if [[ -n "$DETECTED_NVIDIA" ]]; then
-        echo "  • NVIDIA: $(echo "$DETECTED_NVIDIA" | sed 's/.*: //')"
+    # Display detected hardware, each name cut to keep the line within 79
+    # columns (lspci's names run long): "   · VENDOR: " is 13 columns
+    local -a gpu_rows=()
+    [[ -z "$DETECTED_NVIDIA" ]] \
+        || gpu_rows+=("NVIDIA:" "$(fit "${DETECTED_NVIDIA##*: }" 66)")
+    [[ -z "$DETECTED_INTEL" ]] \
+        || gpu_rows+=("Intel:" "$(fit "${DETECTED_INTEL##*: }" 66)")
+    if [[ -n "$DETECTED_AMD" && "$amd_is_igpu" == "true" ]]; then
+        gpu_rows+=("AMD:" "$(fit "${DETECTED_AMD##*: }" 53) (integrated)")
+    elif [[ -n "$DETECTED_AMD" ]]; then
+        gpu_rows+=("AMD:" "$(fit "${DETECTED_AMD##*: }" 55) (discrete)")
     fi
-    if [[ -n "$DETECTED_INTEL" ]]; then
-        echo "  • Intel:  $(echo "$DETECTED_INTEL" | sed 's/.*: //')"
-    fi
-    if [[ -n "$DETECTED_AMD" ]]; then
-        if [[ "$amd_is_igpu" == "true" ]]; then
-            echo "  • AMD:    $(echo "$DETECTED_AMD" | sed 's/.*: //') (integrated)"
-        else
-            echo "  • AMD:    $(echo "$DETECTED_AMD" | sed 's/.*: //') (discrete)"
-        fi
-    fi
+    info "Detected graphics hardware:"
+    local _r
+    for (( _r = 0; _r < ${#gpu_rows[@]}; _r += 2 )); do
+        printf '   %s·%s %-8s%s\n' "$CDIM" "$C0" "${gpu_rows[_r]}" "${gpu_rows[_r+1]}"
+    done
     if [[ -z "$DETECTED_NVIDIA" && -z "$DETECTED_INTEL" && -z "$DETECTED_AMD" ]]; then
         warn "  No recognized GPU detected"
     fi
@@ -820,10 +1405,21 @@ configure_extras() {
         echo
     fi
 
+    # From the review, the cursor starts on the earlier pick (when it is
+    # still offered), so Enter keeps it. --selected only in its = form:
+    # the s5 stub drops --flag=value tokens whole.
+    local -a keep=()
+    if (( REVIEWING )) && [[ -n ${GPU_PICK:-} ]]; then
+        for _r in "${gpu_options[@]}"; do
+            if [[ $_r == "$GPU_PICK" ]]; then keep=("--selected=$GPU_PICK"); fi
+        done
+    fi
     info "Select GPU setup:"
-    prompt_choose GPU_SETUP < <(printf '%s\n' "${gpu_options[@]}")
+    prompt_choose GPU_SETUP "${keep[@]}" < <(printf '%s\n' "${gpu_options[@]}")
 
-    # Extract just the script name from selection
+    # Extract just the script name from selection (the line itself is kept
+    # for the review card)
+    GPU_PICK=$GPU_SETUP
     case "$GPU_SETUP" in
         nvidia-setup*) GPU_SETUP="nvidia" ;;
         intel-setup*)  GPU_SETUP="intel" ;;
@@ -838,30 +1434,176 @@ configure_extras() {
     # -------------------------------------------------------------------------
     info "Firewall Configuration:"
     echo
-    gum style --foreground="#89b4fa" "Select firewall rules to enable (space to select, enter to confirm):"
+    # gum 2.0.2 toggles with x or tab, not space; this list's help line is
+    # off with the rest, so the copy carries the hint
+    info "Open any ports? Everything else stays closed. (x toggles, enter confirms)"
     echo
 
-    # Use gum choose with --no-limit for multi-select
-    prompt_choose FIREWALL_RULES --no-limit \
+    # gum choose --no-limit for multi-select. From the review the earlier
+    # openings start ticked, so Enter keeps them: one --selected each, its
+    # comma escaped (gum splits the flag's value on commas)
+    keep=()
+    if (( REVIEWING )); then
+        while IFS= read -r _r; do
+            if [[ -n $_r ]]; then keep+=("--selected=${_r//,/\\,}"); fi
+        done <<< "${FIREWALL_RULES:-}"
+    fi
+    prompt_choose FIREWALL_RULES --no-limit "${keep[@]}" \
         "SSH (port 22)" \
         "HTTP/HTTPS (ports 80, 443)" \
         "KDE Connect / GSConnect (ports 1714-1764)"
+    # No summary here: review_plan shows every answer on one card
+}
 
+# -----------------------------------------------------------------------------
+# Review: the one gate to the disk
+# -----------------------------------------------------------------------------
+
+# plan_row KEY VALUE [COLOUR]: one row of the review card, the key dim and
+# padded to 10, the value from column 14 as U19 draws it, VALUE cut to 65
+# columns, then its " · " separators dimmed. COLOUR is the value's: the
+# user's own answers by default.
+plan_row() {
+    local c=${3-$CYOU} v
+    v=$(fit "$2" 65)
+    printf '   %s%-10s%s %s%s%s\n' "$CDIM" "$1" "$C0" "$c" \
+        "${v// · /$CDIM · $C0$c}" "$C0"
+}
+
+# plan_card: every answer on one card, and the route from here. Nothing on
+# it is written yet. The swapfile is sized as configure_swap will size it.
+plan_card() {
+    local s size="" model="" ram swap_mb swap="" fs gpu fw rule i user tz room
+    local route_runs="" route_asks=""
+    info "Nothing has been written yet. Here's the plan."
     echo
-    success "Configuration summary:"
-    echo "  GPU Setup:  $GPU_SETUP"
-    echo -n "  Firewall:   "
-    if [[ -z "$FIREWALL_RULES" ]]; then
-        echo "Default deny (no extra rules)"
+
+    s=$(lsblk -dno SIZE,MODEL "$DISK" 2>/dev/null || true)
+    read -r size model <<< "$s" || true
+    plan_row disk "$(fit "$DISK" 24)  $size  $model"
+
+    ram=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || true)
+    if [[ $ram =~ ^[0-9]+$ ]]; then
+        swap_mb=$(swap_size_mb "$ram")
+        if (( swap_mb >= 1024 )); then swap="$(( swap_mb / 1024 ))G"; else swap="${swap_mb}M"; fi
+        swap=" · $swap swapfile"
+    fi
+    fs="EFI 512M · btrfs (5 subvolumes)$swap"
+    if [[ ${ENCRYPT_DISK:-} == yes ]]; then fs+=" · encrypted"; else fs+=" · not encrypted"; fi
+    plan_row "  becomes" "$fs" ""
+
+    # The host gives way first (a hostname runs to 63 characters, a zone
+    # name to 32, and the host keeps at least 8), so the timezone shows
+    # whole unless the user and zone together run past 46 characters: in
+    # practice only America/Argentina/ComodRivadavia with a 15- or
+    # 16-character user and a hostname of 7 or more
+    user=$(fit "${USERNAME:-}" 16) tz=${TIMEZONE:-}
+    room=$(( 65 - 11 - ${#user} - ${#tz} ))
+    if (( room > 24 )); then room=24; elif (( room < 8 )); then room=8; fi
+    plan_row machine "$(fit "${HOSTNAME:-}" "$room") · user $user · $tz"
+    plan_row locale "${DEFAULT_LOCALE:-} · ${DEFAULT_KEYMAP:-} keyboard"
+    if [[ -n ${GIT_USER_NAME:-} || -n ${GIT_USER_EMAIL:-} ]]; then
+        plan_row git "${GIT_USER_NAME:-}${GIT_USER_NAME:+${GIT_USER_EMAIL:+ }}${GIT_USER_EMAIL:+<$GIT_USER_EMAIL>}"
+    fi
+
+    case ${GPU_SETUP:-skip} in
+        nvidia) gpu=nvidia
+                if [[ ${GPU_PICK:-} == *hybrid* ]]; then gpu+=" (hybrid)"; fi ;;
+        intel)  gpu=intel ;;
+        amd)    gpu=amd
+                if [[ ${GPU_PICK:-} == *integrated* ]]; then gpu+=" (integrated)"
+                elif [[ ${GPU_PICK:-} == *discrete* ]]; then gpu+=" (discrete)"; fi ;;
+        *)      gpu="no driver setup" ;;
+    esac
+    fw="deny all"
+    while IFS= read -r rule; do
+        if [[ -n $rule ]]; then fw+=" + ${rule%% (*}"; fi
+    done <<< "${FIREWALL_RULES:-}"
+    # One row as a rule, two when every opening would not fit on it
+    if (( ${#gpu} + 12 + ${#fw} <= 65 )); then
+        plan_row graphics "$gpu · firewall $fw"
     else
-        echo "$FIREWALL_RULES" | tr '\n' ', ' | sed 's/, $//'
-        echo
+        plan_row graphics "$gpu"
+        plan_row firewall "$fw"
     fi
     echo
 
-    if ! confirm "Proceed with these settings?"; then
-        configure_extras
+    # The route from here, from the spine: dotfiles is the one that asks
+    for (( i = STEP_N; i < ${#STEPS[@]}; i++ )); do
+        if [[ ${STEPS[i]} == dotfiles ]]; then
+            route_asks+="${route_asks:+ · }${STEPS[i]}"
+        else
+            route_runs+="${route_runs:+ · }${STEPS[i]}"
+        fi
+    done
+    printf '   %sthen, on its own:%s %s\n' "$CDIM" "$C0" "$route_runs"
+    if [[ -n $route_asks ]]; then
+        printf '   %sit asks again at:%s %s\n' "$CDIM" "$C0" "$route_asks"
     fi
+    echo
+}
+
+# erase_gate: the point of no return, on a screen of its own (the card and
+# the menu above it would scroll the masthead off). The disk as it is now,
+# then its name typed out (sda, or /dev/sda), which proves the user read
+# which disk. This is the last prompt before partition_disk sets
+# DISK_TOUCHED. A wrong name asks again (three tries, then a die, nothing
+# written); Esc is a clean cancel through prompt_input.
+erase_gate() {
+    local name try
+    header
+    printf '   %s! Everything on %s will be erased. There is no undo.%s\n' \
+        "$CBAD" "$(fit "$DISK" 24)" "$C0"
+    echo
+    lsblk -o NAME,SIZE,FSTYPE,LABEL "$DISK"
+    echo
+    info "Type the disk's name to erase it. Esc stops, nothing written."
+    for try in 1 2 3; do
+        prompt_input name --placeholder "the disk's name"
+        name=${name//[[:space:]]/}
+        if [[ -n $name && ( $name == "${DISK#/dev/}" || $name == "$DISK" ) ]]; then
+            # gum clears its line on Enter: the name stays, as typed, and
+            # the rule holds for a beat before partition_disk clears it
+            printf '   > %s\n\n' "$(you "$(fit "$name" 70)")"
+            printf '   %s─── %spast the point of no return · writing to %s%s ───%s\n' \
+                "$CDIM" "$CBAD" "$(fit "$DISK" 24)" "$CDIM" "$C0"
+            sleep 1
+            return 0
+        fi
+        (( try < 3 )) || die "That isn't the disk's name. Nothing was written."
+        warn "Those didn't match. Try again (Esc cancels)."
+    done
+}
+
+# review_plan: chapter 4, the one gate. The card, then install, change a
+# chapter and come back (it re-asks that chapter whole, the earlier answers
+# pre-filled where it can; a Cancel at the disk's "Erase?" keeps the old
+# disk), or quit. Every
+# prompt goes through the wrappers and nothing is written: a cancel here is
+# clean. "Install" leads to erase_gate, the last prompt before the disk.
+review_plan() {
+    local pick prev
+    REVIEWING=1
+    while :; do
+        header
+        plan_card
+        prompt_choose pick "Install on $DISK" "Change the disk" "Change you" \
+            "Change machine" "Quit, nothing written"
+        case $pick in
+            "Install on $DISK") break ;;
+            "Change the disk")  prev=$DISK
+                                step disk;    select_disk
+                                DISK=${DISK:-$prev}; step review ;;
+            "Change you")       step you;     configure_user;   step review ;;
+            "Change machine")   step machine; configure_extras; step review ;;
+            "Quit, nothing written")
+                echo
+                info "No problem, nothing was written. Run hyprland-install when you're ready."
+                exit 0 ;;
+            *) die "No choice made. Nothing was written." ;;
+        esac
+    done
+    erase_gate
 }
 
 # -----------------------------------------------------------------------------
@@ -870,36 +1612,45 @@ configure_extras() {
 
 partition_disk() {
     header
-    info "Partitioning $DISK..."
+    info "$STEP_AWAY"
     echo
 
     # Leftovers from a previous failed run block wipefs/parted (held
     # partitions can't be re-read) - tear them down so a re-run just works
     if mountpoint -q /mnt 2>/dev/null || [[ -e /dev/mapper/cryptroot ]]; then
-        warn "  Clearing leftovers from a previous run..."
+        warn "Clearing leftovers from a previous run..."
         teardown_target
         if mountpoint -q /mnt 2>/dev/null || [[ -e /dev/mapper/cryptroot ]]; then
-            die "Could not clear previous install state - unmount /mnt and close 'cryptroot' manually, then retry"
+            warn "Unmount /mnt and close 'cryptroot' manually, then retry."
+            die "Could not clear previous install state"
         fi
     fi
 
-    # Point of no return: enable cleanup-on-failure from here on
-    DISK_TOUCHED=1
+    # Point of no return: enable cleanup-on-failure from here on, and start
+    # the clock the finish receipt's "built in" reads
+    DISK_TOUCHED=1 INSTALL_T0=$SECONDS
 
-    gum spin --show-error --spinner dot --title "Wiping disk..." -- \
+    # The spinner shows what is running; the ledger line after it keeps
+    # what is done (a failed spin fires ERR first, so it never prints)
+    gum spin --show-error --title "Wiping disk..." -- \
         wipefs -af "$DISK"
+    success "Wiped $DISK"
 
-    gum spin --show-error --spinner dot --title "Creating partition table..." -- \
+    gum spin --show-error --title "Creating partition table..." -- \
         parted -s "$DISK" mklabel gpt
+    success "GPT partition table"
 
-    gum spin --show-error --spinner dot --title "Creating EFI partition (512MB)..." -- \
+    gum spin --show-error --title "Creating EFI partition (512MB)..." -- \
         parted -s "$DISK" mkpart primary fat32 1MiB 513MiB
+    success "EFI partition, 512 MiB"
 
-    gum spin --show-error --spinner dot --title "Setting EFI flags..." -- \
+    gum spin --show-error --title "Setting EFI flags..." -- \
         parted -s "$DISK" set 1 esp on
+    success "EFI system partition flag"
 
-    gum spin --show-error --spinner dot --title "Creating root partition..." -- \
+    gum spin --show-error --title "Creating root partition..." -- \
         parted -s "$DISK" mkpart primary btrfs 513MiB 100%
+    success "Root partition, the rest of the disk"
 
     # Wait for the kernel to pick up the new partition table
     partprobe "$DISK" 2>/dev/null || true
@@ -921,10 +1672,9 @@ partition_disk() {
         sleep 0.5
     done
     if [[ ! -b "$EFI_PART" || ! -b "$ROOT_PART" ]]; then
-        die "Partition device nodes did not appear: $EFI_PART $ROOT_PART"
+        die "Partitions did not appear: $EFI_PART $ROOT_PART"
     fi
 
-    success "Partitioning complete!"
     echo
     lsblk "$DISK"
     sleep 2
@@ -939,16 +1689,16 @@ format_partitions() {
     info "Formatting partitions..."
     echo
 
-    info "Formatting EFI partition (FAT32)..."
+    doing "Formatting EFI partition (FAT32)"
     mkfs.fat -F32 "$EFI_PART"
     [[ "$(blkid -s TYPE -o value "$EFI_PART")" == "vfat" ]] \
         || die "EFI partition did not format as FAT32"
 
     if [[ "$ENCRYPT_DISK" == "yes" ]]; then
-        info "Setting up LUKS encryption..."
+        doing "Setting up LUKS encryption"
         echo -n "$ENCRYPT_PASSWORD" | cryptsetup luksFormat --type luks2 "$ROOT_PART" -
 
-        info "Opening encrypted container..."
+        doing "Opening encrypted container"
         echo -n "$ENCRYPT_PASSWORD" | cryptsetup open "$ROOT_PART" cryptroot -
         [[ -b /dev/mapper/cryptroot ]] \
             || die "LUKS container did not appear at /dev/mapper/cryptroot"
@@ -956,19 +1706,19 @@ format_partitions() {
         # Store the mapper device for later use
         CRYPT_DEVICE="/dev/mapper/cryptroot"
 
-        info "Formatting encrypted partition (BTRFS)..."
+        doing "Formatting encrypted partition (BTRFS)"
         mkfs.btrfs -f "$CRYPT_DEVICE"
         [[ "$(blkid -s TYPE -o value "$CRYPT_DEVICE")" == "btrfs" ]] \
             || die "Encrypted root did not format as BTRFS"
     else
-        info "Formatting root partition (BTRFS)..."
+        doing "Formatting root partition (BTRFS)"
         mkfs.btrfs -f "$ROOT_PART"
         [[ "$(blkid -s TYPE -o value "$ROOT_PART")" == "btrfs" ]] \
             || die "Root partition did not format as BTRFS"
         CRYPT_DEVICE=""
     fi
 
-    success "Formatting complete!"
+    success "Formatting complete"
     sleep 1
 }
 
@@ -993,7 +1743,7 @@ mount_partitions() {
     mount "$mount_device" /mnt
 
     # Create BTRFS subvolumes
-    info "Creating BTRFS subvolumes..."
+    doing "Creating BTRFS subvolumes"
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@snapshots
@@ -1015,7 +1765,7 @@ mount_partitions() {
 
     mount "$EFI_PART" /mnt/boot
 
-    success "Partitions mounted!"
+    success "Partitions mounted"
     sleep 1
 }
 
@@ -1025,17 +1775,15 @@ mount_partitions() {
 
 install_base() {
     header
-    info "Installing base system..."
-    echo
 
     # Initialize pacman keyring
-    info "Initializing pacman keyring..."
+    doing "Initializing pacman keyring"
     pacman-key --init
     pacman-key --populate archlinux
 
     # Pre-configure locale in target before package install
     # Some packages check locale during installation
-    info "Pre-configuring locale..."
+    doing "Pre-configuring locale"
     mkdir -p /mnt/etc
     echo "$DEFAULT_LOCALE UTF-8" > /mnt/etc/locale.gen
     echo "LANG=$DEFAULT_LOCALE" > /mnt/etc/locale.conf
@@ -1051,45 +1799,59 @@ install_base() {
         # Fallback to essential packages if file not found
         packages=(base linux linux-firmware grub efibootmgr iwd)
         warn "Package list not found, installing minimal system..."
+        note "only a minimal system was installed (no package list)"
+        MINIMAL_SYSTEM=1 GREETER_OK=0
     fi
 
-    info "Installing ${#packages[@]} packages..."
-    echo
-
     if [[ "$OFFLINE_MODE" -eq 1 ]]; then
-        # Offline installation using local repository
-        info "Using offline repository (no download required)..."
-        echo
-
         # Copy offline repository to target
+        doing "Copying the offline repository to the target"
         mkdir -p /mnt/opt/offline-repo
         cp -r "$OFFLINE_REPO"/* /mnt/opt/offline-repo/
 
         # Create pacman.conf for target that uses offline repo
         mkdir -p /mnt/etc/pacman.d
         cp /etc/pacman.d/offline-pacman.conf /mnt/etc/pacman.conf
+    fi
 
+    # The list names packages, not their dependencies: the real total is
+    # only known once pacstrap is done (counted for the closing rule)
+    echo
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
+        info "Installing ${#packages[@]} packages plus dependencies, from the ISO. No downloads."
+    else
+        info "Downloading and installing ${#packages[@]} packages plus dependencies."
+    fi
+    echo
+    stream_open pacstrap "pacman's (n/N) counter below is the real progress bar." \
+        "$STEP_AWAY"
+
+    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
         # Install packages with pacstrap using offline config
         pacstrap -C /etc/pacman.d/offline-pacman.conf -K /mnt "${packages[@]}"
     else
-        # Online installation (original behavior)
-        info "This will take several minutes (downloading packages)..."
-        echo
-
-        # Sync package databases
-        info "Syncing package databases..."
+        # Sync package databases, then install
         pacman -Sy
-
-        # Install packages with pacstrap
         pacstrap -K /mnt "${packages[@]}"
     fi
 
     # Verify installation succeeded
     if [[ ! -x /mnt/usr/bin/ln ]]; then
-        die "Base system installation failed - coreutils not found!"
+        die "Base system installation failed - coreutils not found."
     fi
 
-    success "Base system installed!"
+    # The payoff number. A count that fails (or comes out odd) must not
+    # fail the install: the rule then just says it is done
+    local n
+    n=$(pacman -r /mnt -Qq 2>/dev/null | wc -l) || n=""
+    [[ $n =~ ^[1-9][0-9]*$ ]] || n=""
+    PKG_COUNT=$n
+    if [[ -n $n ]]; then
+        stream_close ok "$(commas "$n") packages"
+    else
+        stream_close ok "base system"
+    fi
+    success "Base system installed"
     sleep 1
 }
 
@@ -1103,11 +1865,11 @@ configure_system() {
     echo
 
     # Generate fstab
-    info "  Generating fstab..."
+    doing "Generating fstab"
     genfstab -U /mnt >> /mnt/etc/fstab
 
     # Copy pacman.conf with multilib enabled
-    info "  Copying pacman.conf (multilib enabled)..."
+    doing "Copying pacman.conf (multilib enabled)"
     if [[ "$OFFLINE_MODE" -eq 1 ]]; then
         # In offline mode, keep the offline pacman.conf (set during install_base)
         # Just ensure mirrorlist is copied for future online updates
@@ -1118,16 +1880,16 @@ configure_system() {
     fi
 
     # Timezone
-    info "  Setting timezone..."
+    doing "Setting timezone"
     arch-chroot /mnt ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
     arch-chroot /mnt hwclock --systohc
 
     # Generate locale (config was set before pacstrap)
-    info "  Generating locale..."
+    doing "Generating locale"
     arch-chroot /mnt locale-gen
 
     # Hostname
-    info "  Setting hostname..."
+    doing "Setting hostname"
     echo "$HOSTNAME" > /mnt/etc/hostname
     cat > /mnt/etc/hosts << EOF
 127.0.0.1   localhost
@@ -1136,19 +1898,19 @@ configure_system() {
 EOF
 
     # Create user
-    info "  Creating user $USERNAME..."
+    doing "Creating user $USERNAME"
     arch-chroot /mnt useradd -m -G wheel -s "$DEFAULT_SHELL" "$USERNAME"
     echo "$USERNAME:$PASSWORD" | arch-chroot /mnt chpasswd
 
     # Copy custom Hyprland config to user's home
-    info "  Installing Hyprland config..."
+    doing "Installing Hyprland config"
     mkdir -p "/mnt/home/$USERNAME/.config/hypr"
     cp /etc/skel/.config/hypr/hyprland.lua "/mnt/home/$USERNAME/.config/hypr/"
     arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
 
     # Configure git for user
     if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
-        info "  Configuring git..."
+        doing "Configuring git"
         arch-chroot /mnt sudo -u "$USERNAME" git config --global user.name "$GIT_USER_NAME"
         arch-chroot /mnt sudo -u "$USERNAME" git config --global user.email "$GIT_USER_EMAIL"
         arch-chroot /mnt sudo -u "$USERNAME" git config --global init.defaultBranch main
@@ -1157,7 +1919,7 @@ EOF
     # Enable sudo for wheel group. Root has no password, so this drop-in is
     # the only path to privilege escalation — validate it or the install is
     # unadministrable.
-    info "  Configuring sudo..."
+    doing "Configuring sudo"
     echo '%wheel ALL=(ALL:ALL) ALL' > /mnt/etc/sudoers.d/10-wheel
     chmod 440 /mnt/etc/sudoers.d/10-wheel
     arch-chroot /mnt visudo -cf /etc/sudoers.d/10-wheel
@@ -1165,7 +1927,7 @@ EOF
     # Configure initramfs hooks and kernel command line.
     # The resume hook + resume=/resume_offset= parameters enable hibernation
     # into the swapfile created by configure_swap (which runs before this).
-    info "  Configuring initramfs and kernel parameters..."
+    doing "Configuring initramfs and kernel parameters"
     local kernel_params=""
     local resume_device=""
 
@@ -1204,11 +1966,11 @@ EOF
     fi
 
     # Regenerate initramfs with the updated hooks
-    info "  Regenerating initramfs..."
+    doing "Regenerating initramfs"
     arch-chroot /mnt mkinitcpio -P
 
     # Install bootloader
-    info "  Installing GRUB bootloader..."
+    doing "Installing GRUB bootloader"
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
     # Second pass installs the UEFI fallback loader (EFI/BOOT/BOOTX64.EFI,
     # no NVRAM write) so the disk stays bootable if the firmware boot entry
@@ -1218,17 +1980,42 @@ EOF
     # Exit 0 from grub tools isn't proof the artifacts landed
     [[ -s /mnt/boot/EFI/GRUB/grubx64.efi && -s /mnt/boot/EFI/BOOT/BOOTX64.EFI && -s /mnt/boot/grub/grub.cfg ]] \
         || die "GRUB did not produce a bootable configuration in /boot"
+    success "GRUB, plus the UEFI fallback loader"
+    # True from here even if the installer dies later: teardown only
+    # unmounts. The masthead and the checkpoint below say so
+    BOOTABLE=1
+
+    # From here on the disk boots, so a failure must not fail the install:
+    # every command below, and in the steps after this one, warns and
+    # carries on. A bare command would fire the ERR trap and tear down a
+    # bootable install as a failure.
 
     # Enable services
-    info "  Enabling services..."
-    arch-chroot /mnt systemctl enable iwd
-    arch-chroot /mnt systemctl enable systemd-resolved
-    arch-chroot /mnt systemctl enable greetd
+    doing "Enabling services"
+    # The minimal system has no greetd (nor a desktop for it to start): the
+    # note that says so is install_base's, not a greetd fix that can't work
+    local svc enabled=() svcs=(iwd systemd-resolved)
+    if (( ! MINIMAL_SYSTEM )); then svcs+=(greetd); fi
+    for svc in "${svcs[@]}"; do
+        if arch-chroot /mnt systemctl enable "$svc"; then
+            enabled+=("$svc")
+        else
+            warn "Could not enable $svc"
+            note "$svc is not enabled" "sudo systemctl enable $svc"
+            if [[ $svc == greetd ]]; then GREETER_OK=0; fi
+        fi
+    done
+    if [[ ${#enabled[@]} -gt 0 ]]; then
+        printf -v svc '%s, ' "${enabled[@]}"
+        success "Enabled ${svc%, }"
+    fi
 
     # Configure greetd with tuigreet
-    info "  Configuring greetd..."
-    mkdir -p /mnt/etc/greetd
-    cat > /mnt/etc/greetd/config.toml << 'EOF'
+    if (( ! MINIMAL_SYSTEM )); then
+        doing "Configuring greetd"
+        mkdir -p /mnt/etc/greetd || true
+        cat > /mnt/etc/greetd/config.toml << 'EOF' \
+            || { warn_note "Could not write /etc/greetd/config.toml"; GREETER_OK=0; }
 [terminal]
 vt = 1
 
@@ -1236,10 +2023,11 @@ vt = 1
 command = "tuigreet --remember --remember-session --time --asterisks --cmd 'start-hyprland &>/dev/null'"
 user = "greeter"
 EOF
-    chmod 644 /mnt/etc/greetd/config.toml
+        chmod 644 /mnt/etc/greetd/config.toml 2>/dev/null || true
 
-    # Configure greetd PAM with gnome-keyring support
-    cat > /mnt/etc/pam.d/greetd << 'PAMEOF'
+        # Configure greetd PAM with gnome-keyring support
+        cat > /mnt/etc/pam.d/greetd << 'PAMEOF' \
+            || { warn_note "Could not write /etc/pam.d/greetd"; GREETER_OK=0; }
 #%PAM-1.0
 
 auth       required     pam_securetty.so
@@ -1255,16 +2043,17 @@ password   include      system-local-login
 session    include      system-local-login
 -session   optional     pam_gnome_keyring.so    auto_start
 PAMEOF
-    chmod 644 /mnt/etc/pam.d/greetd
+        chmod 644 /mnt/etc/pam.d/greetd 2>/dev/null || true
 
-    # Ensure greeter user can access greetd
-    arch-chroot /mnt usermod -aG video greeter 2>/dev/null \
-        || warn "  Could not add greeter user to video group"
+        # Ensure greeter user can access greetd
+        arch-chroot /mnt usermod -aG video greeter 2>/dev/null \
+            || { warn_note "Could not add greeter user to video group"; GREETER_OK=0; }
+    fi
 
     # Configure iwd with systemd-resolved
-    info "  Configuring iwd..."
-    mkdir -p /mnt/etc/iwd
-    cat > /mnt/etc/iwd/main.conf << 'EOF'
+    doing "Configuring iwd"
+    mkdir -p /mnt/etc/iwd || true
+    cat > /mnt/etc/iwd/main.conf << 'EOF' || warn_note "Could not write /etc/iwd/main.conf"
 [General]
 EnableNetworkConfiguration=true
 
@@ -1273,41 +2062,62 @@ NameResolvingService=systemd
 EOF
 
     # Link resolv.conf to systemd-resolved
-    ln -sf /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf
+    ln -sf /run/systemd/resolve/stub-resolv.conf /mnt/etc/resolv.conf \
+        || warn_note "Could not link /etc/resolv.conf to systemd-resolved"
 
     # Copy setup scripts (and the shared library they source) to installed system
-    info "  Installing setup scripts..."
+    doing "Installing setup scripts"
     if [[ -f /usr/local/lib/setup-common.sh ]]; then
-        mkdir -p /mnt/usr/local/lib
-        cp /usr/local/lib/setup-common.sh /mnt/usr/local/lib/
+        { mkdir -p /mnt/usr/local/lib && cp /usr/local/lib/setup-common.sh /mnt/usr/local/lib/; } \
+            || warn_note "Could not copy setup-common.sh"
     fi
     for script in nvidia-setup intel-setup amd-setup bluetooth-setup printer-setup firewall-setup dotfiles-setup user-installs-setup; do
         if [[ -f "/usr/local/bin/$script" ]]; then
-            cp "/usr/local/bin/$script" "/mnt/usr/local/bin/"
-            chmod +x "/mnt/usr/local/bin/$script"
+            { cp "/usr/local/bin/$script" "/mnt/usr/local/bin/" && chmod +x "/mnt/usr/local/bin/$script"; } \
+                || warn_note "Could not copy $script"
         fi
     done
 
     # The user installs ride along so user-installs-setup can run them
     # (run_user_installs, below) and the user can re-run them to update
     if [[ -d /usr/local/share/user-installs ]]; then
-        mkdir -p /mnt/usr/local/share
-        cp -r /usr/local/share/user-installs /mnt/usr/local/share/
+        { mkdir -p /mnt/usr/local/share && cp -r /usr/local/share/user-installs /mnt/usr/local/share/; } \
+            || warn_note "Could not copy the user installs"
     fi
 
     # dotfiles.conf rides along so dotfiles-setup can default to the
     # configured repo on the installed system
     if [[ -f /etc/dotfiles.conf ]]; then
-        cp /etc/dotfiles.conf /mnt/etc/dotfiles.conf
+        cp /etc/dotfiles.conf /mnt/etc/dotfiles.conf || warn_note "Could not copy dotfiles.conf"
     fi
 
-    success "System configured!"
-    sleep 1
+    # The checkpoint: the midpoint, and only now true (GRUB verified above).
+    # The copy stays within what holds: the disk boots whatever happens
+    # next. HOST is cut so the card keeps its 74 columns (14 + 25 around it)
+    echo
+    box "${CSEA}◆ Checkpoint${C0}  $(you "$(fit "${HOSTNAME:-This machine}" 31)") can boot on its own now." \
+        "" \
+        "The rest is extras: AUR apps, user installs, drivers, dotfiles."
+    sleep 2
 }
 
 # -----------------------------------------------------------------------------
 # Configure Swap
 # -----------------------------------------------------------------------------
+
+# swap_size_mb RAM_MB: the swapfile's size for RAM_MB of RAM, big enough to
+# hibernate into: twice RAM up to 2 GB of it, then equal to RAM, capped at
+# 16 GB for practicality. configure_swap makes it; the review card shows it.
+swap_size_mb() {
+    local ram=$1
+    if [[ $ram -le 2048 ]]; then
+        echo $(( ram * 2 ))
+    elif [[ $ram -gt 16384 ]]; then
+        echo 16384
+    else
+        echo "$ram"
+    fi
+}
 
 configure_swap() {
     header
@@ -1318,19 +2128,8 @@ configure_swap() {
     local ram_mb
     ram_mb=$(free -m | awk '/^Mem:/{print $2}')
 
-    # Calculate swap size based on RAM (for hibernate support, match RAM)
-    # Best practices:
-    #   RAM <= 2GB:  2x RAM
-    #   RAM 2-8GB:   Equal to RAM
-    #   RAM > 8GB:   Equal to RAM (cap at 16GB for practicality)
     local swap_mb
-    if [[ $ram_mb -le 2048 ]]; then
-        swap_mb=$((ram_mb * 2))
-    elif [[ $ram_mb -gt 16384 ]]; then
-        swap_mb=16384  # Cap at 16GB
-    else
-        swap_mb=$ram_mb
-    fi
+    swap_mb=$(swap_size_mb "$ram_mb")
 
     local swap_gb=$((swap_mb / 1024))
     info "Detected RAM: ${ram_mb}MB"
@@ -1338,7 +2137,7 @@ configure_swap() {
 
     # Create swap file with proper attributes for BTRFS
     # The @swap subvolume is already mounted with nodatacow
-    info "  Creating swap file (this may take a moment)..."
+    doing "Creating swap file (this may take a moment)"
 
     # Use truncate for instant allocation, then chattr for safety
     truncate -s 0 /mnt/swap/swapfile
@@ -1351,16 +2150,17 @@ configure_swap() {
     chmod 600 /mnt/swap/swapfile
 
     # Format as swap
-    info "  Formatting swap file..."
+    doing "Formatting swap file"
     mkswap /mnt/swap/swapfile
 
     # Compute the swapfile's physical offset for hibernation resume.
     # configure_system uses it for the resume_offset= kernel parameter.
-    info "  Computing hibernation resume offset..."
+    doing "Computing hibernation resume offset"
     if ! RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /mnt/swap/swapfile) \
         || [[ ! "$RESUME_OFFSET" =~ ^[0-9]+$ ]]; then
         RESUME_OFFSET=""
-        warn "  Could not determine swapfile offset - hibernation will not be enabled"
+        warn "Could not determine swapfile offset - hibernation will not be enabled"
+        note "hibernation is not enabled (no swapfile offset)"
     fi
 
     # Activate the swapfile for the rest of the install: AUR builds later on
@@ -1368,20 +2168,39 @@ configure_swap() {
     # Non-fatal - swap is a mitigation, not a requirement. Released in
     # finish()/teardown_target() so /mnt can unmount. Kept after the
     # map-swapfile probe above so the offset is read from a quiescent file.
-    info "  Activating swap for the install session..."
-    swapon /mnt/swap/swapfile || warn "  Could not activate swap - continuing without it"
+    doing "Activating swap for the install session"
+    if ! swapon /mnt/swap/swapfile; then
+        warn "Could not activate swap - continuing without it"
+        note "check swap is on (it failed in the installer)" "swapon --show"
+    fi
 
     # Add to fstab
-    info "  Adding swap to fstab..."
+    doing "Adding swap to fstab"
     echo "/swap/swapfile none swap defaults 0 0" >> /mnt/etc/fstab
 
-    success "Swap file configured! (${swap_gb}GB)"
+    success "Swap file configured · ${swap_gb}GB"
     sleep 1
 }
 
 # -----------------------------------------------------------------------------
 # Install Extra Packages (Bluetooth, Printer, Firewall, GPU)
 # -----------------------------------------------------------------------------
+
+# run_setup NAME [ARGS...]: one of the chroot-aware setup scripts, for
+# install_extras. The system already boots, so a failure warns, is added to
+# setup_failed for the step's summary, and the install carries on. Ctrl-C
+# stops the script, not the installer (see apply_dotfiles).
+run_setup() {
+    local rc=0
+    trap ':' INT
+    "/usr/local/bin/$1" "${@:2}" || rc=$?
+    trap 'exit 130' INT
+    if (( rc != 0 )); then
+        warn "$1 failed"
+        setup_failed+=("$*")
+        return 1
+    fi
+}
 
 install_extras() {
     header
@@ -1398,20 +2217,32 @@ install_extras() {
     export DETECTED_INTEL
     export DETECTED_AMD
 
+    # Each script that fails, with its arguments, for the re-run advice
+    local setup_failed=() setup_n=3 note=""
+    if [[ "$GPU_SETUP" != "skip" ]]; then setup_n=4; fi
+
+    # The scripts' own output runs flush left inside the frame
+    if (( BOOTABLE )); then
+        note="$(fit "${HOSTNAME:-The system}" 24) already boots; these are extras."
+    fi
+    stream_open "drivers and services" "$note"
+
     # -------------------------------------------------------------------------
     # Bluetooth Setup (automatic)
     # -------------------------------------------------------------------------
     info "Setting up Bluetooth..."
-    /usr/local/bin/bluetooth-setup
-    success "  Bluetooth configured!"
+    if run_setup bluetooth-setup; then
+        success "Bluetooth configured"
+    fi
     echo
 
     # -------------------------------------------------------------------------
     # Printer Setup (automatic)
     # -------------------------------------------------------------------------
     info "Setting up printing (CUPS)..."
-    /usr/local/bin/printer-setup
-    success "  Printing configured!"
+    if run_setup printer-setup; then
+        success "Printing configured"
+    fi
     echo
 
     # -------------------------------------------------------------------------
@@ -1420,19 +2251,20 @@ install_extras() {
     info "Setting up firewall (UFW)..."
 
     # Build firewall args from selected rules
-    local firewall_args=""
+    local firewall_args=()
     if echo "$FIREWALL_RULES" | grep -q "SSH"; then
-        firewall_args="$firewall_args --ssh"
+        firewall_args+=(--ssh)
     fi
     if echo "$FIREWALL_RULES" | grep -q "HTTP"; then
-        firewall_args="$firewall_args --http"
+        firewall_args+=(--http)
     fi
     if echo "$FIREWALL_RULES" | grep -q "KDE Connect"; then
-        firewall_args="$firewall_args --kdeconnect"
+        firewall_args+=(--kdeconnect)
     fi
 
-    /usr/local/bin/firewall-setup $firewall_args
-    success "  Firewall configured!"
+    if run_setup firewall-setup "${firewall_args[@]}"; then
+        success "Firewall configured"
+    fi
     echo
 
     # -------------------------------------------------------------------------
@@ -1442,19 +2274,33 @@ install_extras() {
         info "Setting up GPU drivers ($GPU_SETUP)..."
         echo
 
+        # Online, nvidia-setup's legacy path builds its driver from the AUR
+        # as the user, and yay calls sudo: the same temporary rule as the
+        # AUR step (offline the driver comes from the ISO's repo, as root)
+        local gpu_ok=1 gpu_sudo=0
+        if [[ "$OFFLINE_MODE" -ne 1 && "$GPU_SETUP" == nvidia ]]; then
+            if grant_install_sudo; then
+                gpu_sudo=1
+            else
+                warn "Could not grant temporary sudo - a legacy driver build may ask for a password"
+            fi
+        fi
         case "$GPU_SETUP" in
             nvidia)
-                /usr/local/bin/nvidia-setup
+                run_setup nvidia-setup || gpu_ok=0
                 ;;
             intel)
-                /usr/local/bin/intel-setup
+                run_setup intel-setup || gpu_ok=0
                 ;;
             amd)
-                /usr/local/bin/amd-setup
+                run_setup amd-setup || gpu_ok=0
                 ;;
         esac
+        if (( gpu_sudo )); then revoke_install_sudo; fi
 
-        success "  GPU drivers configured!"
+        if (( gpu_ok )); then
+            success "GPU drivers configured"
+        fi
     else
         info "Skipping GPU setup (can be run later with *-setup scripts)"
     fi
@@ -1462,8 +2308,25 @@ install_extras() {
     # Clear environment
     unset CHROOT_TARGET CHROOT_USER NONINTERACTIVE
 
-    echo
-    success "Additional components installed!"
+    if [[ ${#setup_failed[@]} -gt 0 ]]; then
+        stream_close note "$(( setup_n - ${#setup_failed[@]} )) of $setup_n set up"
+    else
+        stream_close ok "$setup_n of $setup_n set up"
+    fi
+    if [[ ${#setup_failed[@]} -gt 0 ]]; then
+        warn "$(plural ${#setup_failed[@]} 'setup script') failed."
+        warn "After rebooting, run:"
+        local cmd fix=""
+        for cmd in "${setup_failed[@]}"; do
+            echo "     $cmd"
+            fix+="${fix:+; }$cmd"
+        done
+        note "$(plural ${#setup_failed[@]} 'setup script') failed" "$fix"
+        sleep 3
+        return 0
+    fi
+
+    success "Additional components installed"
     sleep 1
 }
 
@@ -1483,6 +2346,7 @@ install_aur_packages() {
     if [[ ! -f "$aur_packages_file" ]]; then
         warn "AUR packages file not found: $aur_packages_file"
         warn "Skipping AUR package installation"
+        note "no AUR packages were installed (no package list)"
         return 0
     fi
 
@@ -1493,39 +2357,73 @@ install_aur_packages() {
         return 0
     fi
 
-    info "Packages to install: ${aur_packages[*]}"
+    info "Packages to install:"
+    print_words "${aur_packages[@]}"
     echo
+
+    # The success line is for a clean run only: after a failure the closing
+    # rule ("! 1 of 2 built") and the warning say what happened
+    local aur_clean=1
 
     if [[ "$OFFLINE_MODE" -eq 1 ]]; then
         # Offline mode: AUR packages are already in the offline repository
-        info "Installing pre-built AUR packages from offline repository..."
-        echo
-
         # Track failed packages
-        local failed_packages=()
+        local failed_packages=() n=${#aur_packages[@]} i=0
+
+        # Nothing here asks for a password: pacman runs as root
+        stream_open "AUR packages" \
+            "Built ahead of time and kept on the ISO: pacman installs each one." \
+            "$(apps_note 1)"
 
         # Install each AUR package directly with pacman (they're in the offline repo)
+        # Ctrl-C stops the package installing, not the installer: the system
+        # is bootable, and restore_pacman_conf must still point pacman.conf
+        # at the online repos (see apply_dotfiles). The prints inside get
+        # `|| true`: a print that fails must not trip set -e
+        trap ':' INT
         for pkg in "${aur_packages[@]}"; do
-            info "  Installing $pkg..."
+            i=$(( i + 1 ))
+            pkg_rule AUR "$i" "$n" "$pkg" || true
             if ! arch-chroot /mnt pacman -S --noconfirm "$pkg"; then
-                warn "  Failed to install $pkg"
+                warn "Failed to install $pkg" || true
                 failed_packages+=("$pkg")
             fi
         done
+        trap 'exit 130' INT
 
         # Report failures
         if [[ ${#failed_packages[@]} -gt 0 ]]; then
-            echo
-            warn "WARNING: ${#failed_packages[@]} AUR packages failed to install:"
+            stream_close note "$(( n - ${#failed_packages[@]} )) of $n installed"
+            warn "$(plural ${#failed_packages[@]} 'AUR package') failed to install:"
             for pkg in "${failed_packages[@]}"; do
-                echo "  - $pkg"
+                echo "     - $pkg"
             done
             echo
-            warn "After rebooting, install manually with: yay -S ${failed_packages[*]}"
+            warn "After rebooting, install manually with:"
+            print_cmd yay -S "${failed_packages[@]}"
+            aur_note "didn't install" "${failed_packages[@]}"
+            aur_clean=0
             sleep 3
+        else
+            stream_close ok "$n of $n installed"
         fi
     else
         # Online mode: Build AUR packages with yay
+        # The sync databases are pacstrap's, perhaps an hour old by now, and
+        # mirrors drop superseded files, so a stale one can 404 a build
+        # dependency. -Syu, not -Sy: no partial upgrade. A refresh that fails
+        # only warns (the builds may still work); Ctrl-C stops pacman only
+        stream_open "pacman -Syu" "Fresh package databases for the builds."
+        trap ':' INT
+        if arch-chroot /mnt pacman -Syu --noconfirm; then
+            stream_close ok "databases up to date"
+        else
+            stream_close note "not refreshed"
+            warn "Could not refresh the package databases - some AUR builds may fail"
+        fi
+        trap 'exit 130' INT
+        echo
+
         # Use user's home directory (guaranteed to exist after useradd -m)
         local script_path="/mnt/home/$USERNAME/install-aur.sh"
         local failed_marker="/mnt/home/$USERNAME/.aur-failed"
@@ -1535,7 +2433,9 @@ install_aur_packages() {
         # so a broken optional package must never tear the install down:
         # packages install one at a time, failures collect in ~/.aur-failed,
         # and only a failed yay bootstrap (exit 2) skips the whole step.
-        cat > "$script_path" << AURSCRIPT
+        # A script that cannot be written counts as a failed bootstrap.
+        local aur_rc=0 aur_n=${#aur_packages[@]}
+        cat > "$script_path" << AURSCRIPT || aur_rc=2
 #!/bin/bash
 
 cd ~ || exit 2
@@ -1555,7 +2455,13 @@ fi
 # Install AUR packages one at a time so one failed build doesn't
 # take down the rest
 rm -f ~/.aur-failed
+i=0
 for pkg in ${aur_packages[*]}; do
+    i=\$((i + 1))
+    # pkg_rule's line: the name cut to the room left in 79 columns
+    name=\$pkg room=\$(( 79 - 17 - \${#i} - ${#aur_n} ))
+    (( \${#name} <= room )) || name="\${name:0:room-1}…"
+    printf '   %s── AUR %s/%s · %s%s%s ──%s\n' "$CDIM" "\$i" ${#aur_packages[@]} "$C0" "\$name" "$CDIM" "$C0"
     if ! yay -S --noconfirm "\$pkg"; then
         echo "\$pkg" >> ~/.aur-failed
     fi
@@ -1564,48 +2470,113 @@ exit 0
 AURSCRIPT
 
         chown "$USERNAME:$USERNAME" "$script_path" 2>/dev/null || true
-        chmod +x "$script_path"
 
-        # Verify script exists
-        if [[ ! -f "$script_path" ]]; then
-            die "Failed to create AUR install script!"
+        local framed=0 away=1
+        if (( aur_rc == 0 )); then
+            # makepkg -si and yay call sudo as the user, and the builds
+            # outlast sudo's password timeout: no password for this step only.
+            # Without it they may ask, so the rule must not say otherwise
+            if ! grant_install_sudo; then
+                away=0
+                warn "Could not grant temporary sudo - the AUR builds may ask for a password"
+            fi
+
+            # Ctrl-C stops the AUR builds, not the installer (see
+            # apply_dotfiles); the step then ends with the advice below
+            local hint="One package at a time."
+            if [[ ! -x /mnt/usr/bin/yay ]]; then hint="yay first, then one package at a time."; fi
+            stream_open "AUR builds" "$hint Its red ==> lines are its own." \
+                "$(apps_note "$away")"
+            framed=1
+            trap ':' INT
+            arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh" || aur_rc=$?
+            trap 'exit 130' INT
+
+            revoke_install_sudo
         fi
 
-        info "Building and installing yay (AUR helper)..."
-        local aur_rc=0
-        arch-chroot /mnt sudo -u "$USERNAME" bash "/home/$USERNAME/install-aur.sh" || aur_rc=$?
-
         # Cleanup
-        rm -f "$script_path"
+        rm -f "$script_path" || true
 
-        if [[ $aur_rc -ne 0 ]]; then
+        # Ctrl-C (or sudo failing) during the yay bootstrap leaves no yay
+        # behind: give the bootstrap advice, not a yay command that can't run
+        if (( aur_rc != 0 )) && [[ ! -x /mnt/usr/bin/yay ]]; then
+            aur_rc=2
+        fi
+
+        # The outcome on the closing rule, then the advice under it
+        local failed_packages=() n=${#aur_packages[@]}
+        if [[ $aur_rc -eq 0 && -s "$failed_marker" ]]; then
+            mapfile -t failed_packages < "$failed_marker"
+        fi
+        if (( framed )); then
+            if [[ $aur_rc -eq 2 ]]; then
+                stream_close note "yay could not be set up"
+            elif [[ $aur_rc -ne 0 ]]; then
+                stream_close note "stopped early"
+            elif [[ ${#failed_packages[@]} -gt 0 ]]; then
+                stream_close note "$(( n - ${#failed_packages[@]} )) of $n built"
+            else
+                stream_close ok "$n of $n built"
+            fi
+        fi
+
+        if [[ $aur_rc -eq 2 ]]; then
             # Bootstrap failed - the base system is done, so warn and move
             # on rather than throw away a bootable install
-            echo
             warn "Could not set up yay (AUR helper) - all AUR packages were skipped."
-            warn "After rebooting, install yay and run: yay -S ${aur_packages[*]}"
+            warn "After rebooting, install yay and run:"
+            print_cmd yay -S "${aur_packages[@]}"
+            note "no AUR apps: install yay, then run" "yay -S ${aur_packages[*]}"
             sleep 3
-            rm -f "$failed_marker"
+            rm -f "$failed_marker" || true
             return 0
         fi
 
-        if [[ -s "$failed_marker" ]]; then
-            local failed_packages=()
-            mapfile -t failed_packages < "$failed_marker"
-            echo
-            warn "WARNING: ${#failed_packages[@]} AUR packages failed to build/install:"
+        if [[ $aur_rc -ne 0 ]]; then
+            # The script itself only exits 0 or 2: anything else is Ctrl-C
+            # or sudo failing, part way through the packages
+            warn "The AUR step stopped before it finished - some packages may be missing."
+            warn "After rebooting, run:"
+            print_cmd yay -S --needed "${aur_packages[@]}"
+            note "the AUR step stopped early" "yay -S --needed ${aur_packages[*]}"
+            sleep 3
+            rm -f "$failed_marker" || true
+            return 0
+        fi
+
+        if [[ ${#failed_packages[@]} -gt 0 ]]; then
+            warn "$(plural ${#failed_packages[@]} 'AUR package') failed to build/install:"
             for pkg in "${failed_packages[@]}"; do
-                echo "  - $pkg"
+                echo "     - $pkg"
             done
             echo
-            warn "After rebooting, install manually with: yay -S ${failed_packages[*]}"
+            warn "After rebooting, install manually with:"
+            print_cmd yay -S "${failed_packages[@]}"
+            aur_note "didn't build" "${failed_packages[@]}"
+            aur_clean=0
             sleep 3
         fi
-        rm -f "$failed_marker"
+        rm -f "$failed_marker" || true
     fi
 
-    success "AUR packages installed!"
+    if (( aur_clean )); then
+        success "AUR packages installed"
+    fi
     sleep 1
+}
+
+# aur_note WHAT PKG...: the receipt's note for AUR packages that failed,
+# named when there is one: "hyprshot didn't build", "3 AUR packages
+# didn't build"
+aur_note() {
+    local what=$1
+    shift
+    if (( $# == 1 )); then
+        note "$(fit "$1" 30) $what" "yay -S $1"
+    else
+        note "$# AUR packages $what" "yay -S $*"
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -1653,10 +2624,13 @@ run_user_installs() {
     # One at a time, so the failures can be named. As with the AUR packages,
     # the system is bootable by now: a failure warns and never aborts
     # Ctrl-C stops the user install running, not the installer (see
-    # apply_dotfiles)
-    local failed=() name
+    # apply_dotfiles). The prints inside get `|| true`, as in the AUR loop
+    local failed=() name n=${#names[@]} i=0
+    stream_open "user installs" "Ctrl-C stops the one running, not the installer."
     trap ':' INT
     for name in "${names[@]}"; do
+        i=$(( i + 1 ))
+        pkg_rule "user install" "$i" "$n" "$name" || true
         if ! arch-chroot /mnt sudo -u "$USERNAME" -H \
                 env USER_INSTALLS_PAYLOADS="$stage" \
                 /usr/local/bin/user-installs-setup "$name"; then
@@ -1664,18 +2638,31 @@ run_user_installs() {
         fi
     done
     trap 'exit 130' INT
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        stream_close note "$(( n - ${#failed[@]} )) of $n installed"
+    else
+        stream_close ok "$n of $n installed"
+    fi
 
-    [[ -z "$stage" ]] || rm -rf "/mnt${stage:?}" || warn "Could not remove /mnt$stage"
+    if [[ -n "$stage" ]] && ! rm -rf "/mnt${stage:?}"; then
+        warn "Could not remove /mnt$stage"
+        note "the bundled payloads are still on disk" "sudo rm -rf $stage"
+    fi
 
     if [[ ${#failed[@]} -gt 0 ]]; then
-        echo
-        warn "WARNING: ${#failed[@]} user install(s) failed: ${failed[*]}"
-        warn "After rebooting, run: user-installs-setup ${failed[*]}"
+        warn "$(plural ${#failed[@]} 'user install') failed: $(fit "${failed[*]}" 46)"
+        warn "After rebooting, run:"
+        print_cmd user-installs-setup "${failed[@]}"
+        if (( ${#failed[@]} == 1 )); then
+            note "$(fit "${failed[0]}" 30) didn't install" "user-installs-setup ${failed[0]}"
+        else
+            note "${#failed[@]} user installs failed" "user-installs-setup ${failed[*]}"
+        fi
         sleep 3
         return 0
     fi
 
-    success "User installs done!"
+    success "User installs done"
     sleep 1
 }
 
@@ -1689,12 +2676,8 @@ run_user_installs() {
 apply_dotfiles() {
     # The dotfiles' setup scripts call sudo; let them, without a password,
     # for this step only
-    if ! { printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$USERNAME" > "$INSTALL_SUDOERS" \
-            && chmod 440 "$INSTALL_SUDOERS" \
-            && arch-chroot /mnt visudo -cf "${INSTALL_SUDOERS#/mnt}" >/dev/null; }; then
-        rm -f "$INSTALL_SUDOERS" || true
-        warn "Could not grant temporary sudo - the dotfiles' scripts may ask for your password"
-    fi
+    grant_install_sudo \
+        || warn "Could not grant temporary sudo - dotfiles scripts may ask for a password"
 
     # Attached to the terminal on purpose: chezmoi's templates may prompt
     # (promptChoiceOnce and friends, e.g. a laptop/desktop choice) and the
@@ -1709,12 +2692,18 @@ apply_dotfiles() {
     # trap would end a bootable install as a failure. A no-op handler (not
     # an ignore, which chezmoi would inherit) lets Ctrl-C stop chezmoi alone.
     local rc=0
+    stream_open chezmoi "chezmoi may ask a question or two. Ctrl-C stops chezmoi only."
     trap ':' INT
     arch-chroot /mnt sudo -u "$USERNAME" -H env ARCH_QUICKSTART_INSTALL=1 \
         chezmoi init --apply --keep-going "$@" || rc=$?
     trap 'exit 130' INT
+    if (( rc == 0 )); then
+        stream_close ok "chezmoi finished"
+    else
+        stream_close note "chezmoi exited with $rc"
+    fi
 
-    rm -f "$INSTALL_SUDOERS" || warn "Could not remove $INSTALL_SUDOERS - delete it after rebooting"
+    revoke_install_sudo
     return "$rc"
 }
 
@@ -1724,34 +2713,45 @@ apply_dotfiles() {
 dotfiles_retry_hint() {
     local home="/mnt/home/$USERNAME"
     if compgen -G "$home/.config/chezmoi/chezmoi.*" > /dev/null; then
-        warn "Some dotfiles did not apply (see above). After rebooting, run: chezmoi apply"
+        warn "Some dotfiles did not apply. After rebooting, run: chezmoi apply"
+        note "some dotfiles did not apply" "chezmoi apply"
     elif [[ -d "$home/.local/share/chezmoi/.git" ]]; then
-        warn "Dotfiles did not apply (see above). After rebooting, run: chezmoi init --apply"
+        warn "Dotfiles did not apply. After rebooting, run: chezmoi init --apply"
+        note "the dotfiles did not apply" "chezmoi init --apply"
     else
-        warn "After rebooting, run: dotfiles-setup $1"
+        warn "After rebooting, run:"
+        print_cmd dotfiles-setup ${1:+"$1"}
+        note "the dotfiles are not set up" "dotfiles-setup${1:+ $1}"
     fi
 }
 
 setup_dotfiles() {
     header
-    info "Dotfiles Setup"
+    # Your turn: the first question since the gate. Flash the screen with
+    # the console's own reverse video, a visual bell that reads from across
+    # the room. A Ctrl-C inside the 0.15 s ends the installer (as anywhere
+    # outside a child step); on_exit undoes the flash on the way out
+    if (( UI_TTY )); then printf '\e[?5h'; sleep 0.15; printf '\e[?5l'; fi
+    info "Welcome back. This one needs you."
     echo
 
     local local_dotfiles="/opt/dotfiles"
 
     # Check for pre-loaded dotfiles on the ISO (offline mode)
     if [[ -d "$local_dotfiles" ]] && [[ -d "$local_dotfiles/.git" ]]; then
-        success "Found pre-loaded dotfiles on ISO!"
-        echo
-
         # Bare gum confirm: the system is fully installed - Ctrl-C/Esc here
         # must mean "no", not a cancel that tears the install down
-        if gum confirm "Apply pre-loaded dotfiles using chezmoi?"; then
+        if gum confirm "Your dotfiles are on this stick. Apply them now?"; then
             # Copy dotfiles to chezmoi's default source location (use /. to include hidden files)
             info "Copying dotfiles to installed system..."
-            mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi"
-            cp -r "$local_dotfiles"/. "/mnt/home/$USERNAME/.local/share/chezmoi/"
-            arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
+            if ! { mkdir -p "/mnt/home/$USERNAME/.local/share/chezmoi" \
+                    && cp -r "$local_dotfiles"/. "/mnt/home/$USERNAME/.local/share/chezmoi/" \
+                    && arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"; }; then
+                warn "Could not copy the pre-loaded dotfiles."
+                dotfiles_retry_hint ""
+                sleep 3
+                return
+            fi
 
             info "Applying dotfiles with chezmoi..."
             if ! apply_dotfiles; then
@@ -1760,7 +2760,8 @@ setup_dotfiles() {
                 return
             fi
 
-            success "Dotfiles applied successfully!"
+            success "Dotfiles applied"
+            DOTFILES_APPLIED=1
             sleep 1
             return
         else
@@ -1772,14 +2773,27 @@ setup_dotfiles() {
     # Bare gum confirm: cancel = skip, same as answering no (see above)
     if ! gum confirm --default=false "Would you like to set up dotfiles from a remote repository?"; then
         info "Skipping dotfiles setup."
+        step_skip
         sleep 1
         return
     fi
 
+    # The configured repo (/etc/dotfiles.conf, parsed, not sourced): the
+    # input's default below, and what dotfiles-setup uses with no argument
+    local dotfiles_repo default_repo
+    default_repo=$(grep -oP "^DOTFILES_REPO=\K.*" /etc/dotfiles.conf 2>/dev/null | tail -1 || true)
+
     # Check if we have network connectivity
     if ! test_network; then
-        warn "No network connection available."
-        warn "You can run 'dotfiles-setup <repo>' after rebooting."
+        warn "No network, so no remote dotfiles for now."
+        if [[ -n "$default_repo" ]]; then
+            warn "After rebooting, run: dotfiles-setup"
+            note "the dotfiles are not set up (no network)" "dotfiles-setup"
+        else
+            warn "After rebooting, run: dotfiles-setup <repo>"
+            note "the dotfiles are not set up (no network)" "dotfiles-setup <repo>"
+        fi
+        step_skip
         sleep 2
         return
     fi
@@ -1789,25 +2803,24 @@ setup_dotfiles() {
     info "(e.g., 'jakeb-grant' or 'https://github.com/user/dotfiles.git')"
     echo
 
-    local dotfiles_repo default_repo
-    # Pre-fill with the configured repo from /etc/dotfiles.conf (parsed, not
-    # sourced); the user can type over it freely
-    default_repo=$(grep -oP "^DOTFILES_REPO=\K.*" /etc/dotfiles.conf 2>/dev/null | tail -1 || true)
+    # Pre-filled with the configured repo; the user can type over it freely
     # Cancel here must not abort the installer - the system is already fully
     # installed at this point; it just skips dotfiles
     if ! dotfiles_repo=$(gum input --placeholder "GitHub username or repo URL" --value "$default_repo"); then
         warn "Skipping dotfiles setup."
+        step_skip
         sleep 1
         return
     fi
 
     if [[ -z "$dotfiles_repo" ]]; then
         warn "No repository specified. Skipping dotfiles setup."
+        step_skip
         sleep 1
         return
     fi
 
-    info "Initializing dotfiles from: $dotfiles_repo"
+    info "Initializing dotfiles from: $(fit "$dotfiles_repo" 48)"
     echo
 
     if ! apply_dotfiles "$dotfiles_repo"; then
@@ -1816,7 +2829,8 @@ setup_dotfiles() {
         return
     fi
 
-    success "Dotfiles applied successfully!"
+    success "Dotfiles applied"
+    DOTFILES_APPLIED=1
     sleep 1
 }
 
@@ -1824,15 +2838,24 @@ setup_dotfiles() {
 # Finish Installation
 # -----------------------------------------------------------------------------
 
-finish() {
-    header
+# Point the target's pacman back at the online repos (offline ISO only:
+# install_base gave it the offline repo). main runs it at the end of the
+# dotfiles chapter, so the finish receipt has the screen to itself. The
+# system is installed: a failure here warns, is noted, and carries on.
+restore_pacman_conf() {
+    if [[ "$OFFLINE_MODE" -ne 1 ]]; then return 0; fi
+    local ok=1
+    echo
+    doing "Pointing pacman at the online repos"
 
-    # Restore standard pacman.conf for online updates after installation
-    if [[ "$OFFLINE_MODE" -eq 1 ]]; then
-        info "Configuring system for online updates..."
+    # The system is fully installed: a write that fails, a mirror hiccup or
+    # a Ctrl-C here must not abort the installer as a failure (see
+    # apply_dotfiles). A Ctrl-C stops the command running, which then
+    # reports as failed, so a half-written pacman.conf is never left unsaid
+    trap ':' INT
 
-        # Create standard pacman.conf (without offline repo)
-        cat > /mnt/etc/pacman.conf << 'PACMANCONF'
+    # Create standard pacman.conf (without offline repo)
+    cat > /mnt/etc/pacman.conf.new << 'PACMANCONF' || ok=0
 #
 # /etc/pacman.conf
 #
@@ -1860,70 +2883,328 @@ Include = /etc/pacman.d/mirrorlist
 [multilib]
 Include = /etc/pacman.d/mirrorlist
 PACMANCONF
-
-        # Optionally remove offline repo to save disk space
-        # Uncomment the following line if you want to remove it:
-        # rm -rf /mnt/opt/offline-repo
-
-        # Sync package databases in the installed system (if network available)
-        if test_network; then
-            info "Syncing package databases..."
-            # The system is fully installed - a mirror hiccup here must not
-            # abort the installer as a failure
-            arch-chroot /mnt pacman -Sy --noconfirm \
-                || warn "Could not sync package databases - run 'pacman -Syu' after reboot"
-        else
-            info "No network - package databases will sync on first online update"
-        fi
-
-        success "System configured for online updates"
-        echo
+    # Written beside and moved into place, so a failed or stopped write
+    # leaves the old pacman.conf whole, as the warning below says
+    if (( ok )) && ! mv -f /mnt/etc/pacman.conf.new /mnt/etc/pacman.conf; then ok=0; fi
+    if (( ! ok )); then
+        rm -f /mnt/etc/pacman.conf.new || true
+        trap 'exit 130' INT
+        warn "Could not restore /etc/pacman.conf - remove the offline repo from it"
+        note "pacman.conf still lists the offline repo" "sudoedit /etc/pacman.conf"
+        return 0
     fi
 
-    gum style \
-        --border rounded \
-        --border-foreground="#a6e3a1" \
-        --padding "1 2" \
-        --margin "1" \
-        --align center \
-        "Installation Complete"
+    # Optionally remove offline repo to save disk space
+    # Uncomment the following line if you want to remove it:
+    # rm -rf /mnt/opt/offline-repo
 
-    echo
-    gum style \
-        --padding "0 2" \
-        "Your new Hyprland system is ready!" \
-        "" \
-        "Next steps:" \
-        "  1. Reboot into your new system" \
-        "  2. Log in with username: $USERNAME" \
-        "  3. Hyprland will start automatically via greetd" \
-        "" \
-        "Useful keybinds (defaults):" \
-        "  SUPER + Enter    → Open terminal (Kitty)" \
-        "  SUPER + E        → File manager (yazi)" \
-        "  SUPER + Q        → Close window" \
-        "  SUPER + 1-9      → Switch workspace" \
-        "" \
-        "These are the fallback config's binds - with dotfiles applied," \
-        "your own replace them, and the shell (bar, launcher, lock" \
-        "screen) comes from your dotfiles (see dotfiles.conf)."
+    # Sync package databases in the installed system (if network available).
+    # Without one, the line that says so comes after the done mark, so the
+    # two read in order
+    if test_network; then
+        doing "Syncing package databases"
+        if ! arch-chroot /mnt pacman -Sy --noconfirm; then
+            ok=0
+            warn "Could not sync package databases - run 'pacman -Syu' after reboot"
+            note "the package databases are not synced" "sudo pacman -Syu"
+        fi
+        if (( ok )); then success "System configured for online updates"; fi
+    else
+        success "System configured for online updates"
+        info "No network yet: the package databases sync on the first update."
+    fi
+    trap 'exit 130' INT
+}
 
+# clock SECS: a chapter's time on the receipt: 0:21, 12:34, 1:02:03
+clock() {
+    local s=$1
+    if (( s >= 3600 )); then
+        printf '%d:%02d:%02d' $(( s / 3600 )) $(( s % 3600 / 60 )) $(( s % 60 ))
+    else
+        printf '%d:%02d' $(( s / 60 )) $(( s % 60 ))
+    fi
+}
+
+# chapter_times [MAX]: the line of chapter times, from prepare on (the
+# questions before it are not install time): "prepare 0:21  base 6:41  ...",
+# a declined chapter as "dotfiles skipped". Two spaces between chapters, one
+# when two would pass MAX columns (76 by default); past that the declined
+# chapters go, then the shortest, so hour-long runs keep their longest.
+chapter_times() {
+    local max=${1:-76} i n gap line min parts=() secs=()
+    for (( i = 0; i < ${#STEPS[@]}; i++ )); do
+        if [[ ${STEPS[i]} == prepare ]]; then break; fi
+    done
+    for (( ; i < ${#STEPS[@]}; i++ )); do
+        n=$(( i + 1 ))
+        if [[ -n ${STEP_SKIP[n]:-} ]]; then
+            parts+=("${CDIM}${STEPS[i]}${C0} skipped") secs+=(-1)
+        elif [[ -n ${STEP_SECS[n]:-} ]]; then
+            parts+=("${CDIM}${STEPS[i]}${C0} $(clock "${STEP_SECS[n]}")")
+            secs+=("${STEP_SECS[n]}")
+        fi
+    done
+    while (( ${#parts[@]} )); do
+        for gap in '  ' ' '; do
+            line=""
+            for i in "${!parts[@]}"; do line+="${line:+$gap}${parts[i]}"; done
+            width "$line"
+            if (( UI_W <= max )); then
+                printf '%s' "$line"
+                return 0
+            fi
+        done
+        min=""
+        for i in "${!secs[@]}"; do
+            if [[ -z $min ]] || (( secs[i] < secs[min] )); then min=$i; fi
+        done
+        unset 'parts[min]' 'secs[min]'
+    done
+}
+
+# disk_spec [MAX] / desktop_spec: the receipt's facts, for the card and the
+# report; the disk's name cut to MAX characters (40 by default)
+disk_spec() {
+    local s
+    s="$(fit "${DISK:-}" "${1:-40}") · btrfs"
+    if [[ ${ENCRYPT_DISK:-} == yes ]]; then s+=" · encrypted"; fi
+    printf '%s' "$s"
+}
+
+desktop_spec() {
+    local s="Hyprland" i
+    if (( MINIMAL_SYSTEM )); then s="minimal system"; fi
+    if [[ -n $PKG_COUNT ]]; then s+=" · $(commas "$PKG_COUNT") packages"; fi
+    for i in "${!STEPS[@]}"; do
+        if [[ ${STEPS[i]} != dotfiles ]]; then continue; fi
+        if (( DOTFILES_APPLIED )); then
+            s+=" · dotfiles applied"
+        elif [[ -n ${STEP_SKIP[i+1]:-} ]]; then
+            s+=" · no dotfiles"
+        else
+            s+=" · dotfiles incomplete"
+        fi
+    done
+    printf '%s' "$s"
+}
+
+# things N: "One thing", "Two things", ... "12 things"
+things() {
+    local w=(One Two Three Four Five Six Seven Eight Nine)
+    if (( $1 == 1 )); then
+        printf 'One thing'
+    elif (( $1 <= 9 )); then
+        printf '%s things' "${w[$1-1]}"
+    else
+        printf '%s things' "$1"
+    fi
+}
+
+# note_rows CUT MAX: the receipt's rows for the notes, into the caller's
+# ROWS. "! what" in amber with the command beside it when both fit in 79
+# columns, else the command under it, folded as print_cmd folds. CUT=1 cuts
+# a word too long for any row (a dotfiles repo URL) to 68 characters, ending
+# in an ellipsis: print_cmd never splits a word, so it would wrap past
+# column 79 and throw the row count off. CUT=2 also cuts a folded command to
+# its first row. MAX > 0 caps the rows, the notes past it summed up in one
+# dim line that points to REPORT_AT. All only when a report holds the full
+# text.
+note_rows() {
+    local LC_ALL=C.UTF-8 i j what fix words=() cmd=() row=()
+    ROWS=()
+    for i in "${!NOTES[@]}"; do
+        what=$(fit "${NOTES[i]}" 74) fix=${NOTE_FIXES[i]}
+        if [[ -n $fix ]] && (( ${#what} <= 30 && ${#fix} <= 43 )); then
+            row=("   ${CWARN}! $what$(rep $(( 30 - ${#what} )) ' ')${C0} $fix")
+        else
+            row=("   ${CWARN}! $what${C0}")
+            if [[ -n $fix ]]; then
+                read -ra words <<< "$fix"
+                # 68: a continuation row's indent 9, the word, " \" after it
+                if (( $1 )); then
+                    for j in "${!words[@]}"; do
+                        words[j]=$(fit "${words[j]}" 68)
+                    done
+                fi
+                mapfile -t cmd < <(print_cmd "${words[@]}")
+                if (( $1 > 1 && ${#cmd[@]} > 1 )); then cmd=("${cmd[0]% \\} …"); fi
+                row+=("${cmd[@]}")
+            fi
+        fi
+        # Room for this note and, while notes are left after it, for the
+        # line that points to them
+        if (( $2 && ${#ROWS[@]} + ${#row[@]} + (i + 1 < ${#NOTES[@]}) > $2 )); then
+            ROWS+=("   ${CDIM}… and $(( ${#NOTES[@]} - i )) more in $REPORT_AT${C0}")
+            return 0
+        fi
+        ROWS+=("${row[@]}")
+    done
+}
+
+# report_text: the receipt as plain text, the names and commands whole.
+# Its blank colours are locals, which chapter_times sees (dynamic scope)
+report_text() {
+    # shellcheck disable=SC2034  # read by chapter_times
+    local C0='' CDIM='' i t
+    printf 'arch quickstart · install report · %(%Y-%m-%d %H:%M %Z)T\n\n' -1
+    printf '%s is ready. Welcome home, %s.\n\n' "${HOSTNAME:-This machine}" "${USERNAME:-}"
+    printf '%-10s%s\n' disk "$(disk_spec 999)" desktop "$(desktop_spec)"
+    if [[ -n $INSTALL_T0 ]]; then
+        printf '%-10s%s\n' "built in" "$(dur $(( SECONDS - INSTALL_T0 )))"
+    fi
+    t=$(chapter_times 999)
+    if [[ -n $t ]]; then printf '%-10s%s\n' chapters "$t"; fi
+    if (( ${#NOTES[@]} )); then
+        printf '\n%s to finish after you reboot:\n' "$(things ${#NOTES[@]})"
+        for i in "${!NOTES[@]}"; do
+            printf '! %s\n' "${NOTES[i]}"
+            if [[ -n ${NOTE_FIXES[i]} ]]; then printf '  %s\n' "${NOTE_FIXES[i]}"; fi
+        done
+    else
+        printf '\nNothing left to do. Clean run.\n'
+    fi
+    printf '\nAfter the reboot, log in as %s.' "${USERNAME:-}"
+    if (( GREETER_OK )); then printf ' Hyprland starts on its own.'; fi
+    printf '\n'
+}
+
+# install_report: the receipt as plain text on the target, for after the
+# reboot (the console keeps nothing): REPORT_LOG, and a copy in the user's
+# home. A write that fails never fails the install. REPORT_AT names the copy
+# that landed, the user's first, "" when none did, so the card never points
+# to one that is not there.
+install_report() {
+    local home="/mnt/home/${USERNAME:-}"
+    REPORT_AT=""
+    if report_text 2>/dev/null > "$REPORT_LOG"; then REPORT_AT=${REPORT_LOG#/mnt}; fi
+    if [[ -n ${USERNAME:-} && -d $home ]] \
+            && report_text 2>/dev/null > "$home/$REPORT_NAME"; then
+        # The user exists only in the target's passwd: chown in the chroot.
+        # Not fatal: root's file is still readable
+        arch-chroot /mnt chown "$USERNAME:" "/home/$USERNAME/$REPORT_NAME" \
+            2>/dev/null || true
+        # shellcheck disable=SC2088  # the reader's ~, printed as it is
+        REPORT_AT="~/$REPORT_NAME"
+    fi
+}
+
+# The finish receipt: one screen, 25 rows with gum confirm's 3. A card with
+# who it is for and what was built, the chapter times, then the notes with
+# their exact commands or a clean bill, the cheat sheet only when nothing
+# else would teach the keys, and the reboot prompt. Everything here sits in
+# the no-abort zone: prints, array work and SECONDS arithmetic only.
+finish() {
+    local host user login built="" times tn=0 pads=1 saved=0 base nb dot rc=0
+    local -a card=() after=() ROWS=()
+    header
+    tide_roll
+
+    # The report first, so the card says it is saved only once it is
+    install_report
+    if [[ -n $REPORT_AT ]]; then saved=1; fi
+
+    # Names cut to keep the title in the card's 70 columns (hostnames run
+    # to 63 characters, usernames to 32)
+    host=$(fit "${HOSTNAME:-This machine}" 24)
+    user=$(fit "${USERNAME:-}" 18)
+    if [[ -n $INSTALL_T0 ]]; then
+        built="${CDIM}built in${C0}  $(dur $(( SECONDS - INSTALL_T0 )))"
+    fi
+    if (( saved )); then
+        if [[ -n $built ]]; then
+            built+=" · saved to $REPORT_AT"
+        else
+            built="${CDIM}report${C0}    saved to $REPORT_AT"
+        fi
+    fi
+    # The login line names the user whole (32 fits on a row of its own);
+    # Hyprland starts on its own only when greetd is set up to start it
+    login="After the reboot, log in as $(you "$(fit "${USERNAME:-}" 40)")."
+    after=("$login")
+    if (( GREETER_OK )); then
+        width "   $login Hyprland starts on its own."
+        if (( UI_W <= 79 )); then
+            after=("$login Hyprland starts on its own.")
+        else
+            after+=("Hyprland starts on its own.")
+        fi
+    fi
+    # A cut name ends in its ellipsis, not "…."
+    dot=.
+    if [[ $user == *… ]]; then dot=""; fi
+    card=("${CSEA}◆${C0} $(you "$host") is ready. Welcome home, $(you "$user")$dot"
+          "${CDIM}disk${C0}      $(disk_spec)"
+          "${CDIM}desktop${C0}   $(desktop_spec)")
+    if [[ -n $built ]]; then card+=("$built"); fi
+    times=$(chapter_times)
+
+    # Fit the screen: the card's blank padding goes first, then the chapter
+    # times; past that the commands are cut to one row each and the notes
+    # capped, the full text being in the report. Only when no copy of the
+    # report could be written is nothing cut: better scrolled off the top
+    # than lost.
+    # base: masthead 3, card and its border, a blank, the after-reboot lines
+    # and a blank, gum confirm 3; nb: the notes or the clean bill, a blank
+    base=$(( 3 + ${#card[@]} + 2 + 1 + ${#after[@]} + 1 + 3 ))
+    if (( ${#NOTES[@]} )); then
+        note_rows "$saved" 0
+        nb=$(( 1 + ${#ROWS[@]} + 1 ))
+    else
+        nb=$(( 3 - DOTFILES_APPLIED ))
+    fi
+    if [[ -n $times ]]; then tn=2; fi
+    if (( base + nb + tn + 3 > 25 )); then pads=0; fi
+    if (( base + nb + tn > 25 )); then
+        tn=0 times=""
+        if (( saved && ${#NOTES[@]} && base + nb > 25 )); then
+            note_rows 2 $(( 25 - base - 2 ))
+        fi
+    fi
+
+    if (( pads )); then card=("" "${card[0]}" "" "${card[@]:1}" ""); fi
+    box "${card[@]}"
     echo
+    if [[ -n $times ]]; then printf '   %s\n\n' "$times"; fi
+    if (( ${#NOTES[@]} )); then
+        info "$(things ${#NOTES[@]}) to finish after you reboot:"
+        printf '%s\n' "${ROWS[@]}"
+    else
+        success "Nothing left to do. Clean run."
+        # The fallback config's binds: with dotfiles applied, the user's own
+        # replace them
+        if (( ! DOTFILES_APPLIED )); then
+            printf '   SUPER+Enter %sterminal%s   SUPER+E %sfiles%s   ' \
+                "$CDIM" "$C0" "$CDIM" "$C0"
+            printf 'SUPER+Q %sclose%s   SUPER+1-9 %sworkspaces%s\n' \
+                "$CDIM" "$C0" "$CDIM" "$C0"
+        fi
+    fi
+    echo
+    for login in "${after[@]}"; do info "$login"; done
+    echo
+
     # Release the target swapfile activated during configure_swap - active
     # swap would make umount -R /mnt fail busy
     swapoff /mnt/swap/swapfile 2>/dev/null || true
 
     # Bare gum confirm: install is complete - Ctrl-C/Esc = "reboot manually",
     # never the failure-cleanup path
-    if gum confirm "Reboot now?"; then
-        umount -R /mnt
+    gum confirm --affirmative=Reboot --negative="Not yet" "Reboot now?" || rc=$?
+    if (( rc == 0 )); then
+        # A busy mount must not turn a finished install into a failure:
+        # shutdown unmounts whatever is left
+        umount -R /mnt || warn "Could not unmount /mnt - rebooting anyway"
         # Successful install: shutdown's SIGTERM must not trigger the
         # failure cleanup
         DISK_TOUCHED=0
-        reboot
+        reboot || warn "Could not reboot - reboot manually when ready."
     else
-        info "You can reboot manually when ready."
-        info "Run 'umount -R /mnt' before rebooting."
+        # n, Esc and Enter: gum clears its three rows, leaving the blank
+        # above them. Ctrl-C (130): gum 2.0.2 clears only the buttons row
+        # and leaves the cursor there, so the prompt and its blank go here
+        if (( rc == 130 && UI_TTY )); then printf '\e[2A\r\e[J'; fi
+        info "Whenever you're ready: umount -R /mnt, then reboot."
     fi
 }
 
@@ -1932,41 +3213,47 @@ PACMANCONF
 # -----------------------------------------------------------------------------
 
 main() {
-    # Check for required tools first: die() itself renders with gum, so this
-    # check must come before anything that could call die, and use plain echo
+    # Check for required tools first: every prompt needs gum. (die() is plain
+    # printf and works without it.)
     if ! command -v gum &>/dev/null; then
-        echo "ERROR: gum is not installed!" >&2
+        echo "ERROR: gum is not installed." >&2
         exit 1
     fi
 
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
-        die "This script must be run as root!"
+        die "This script must be run as root."
     fi
+
+    console_palette
 
     # Detect if offline repository is available
     detect_offline_mode
 
+    # The prologue (no chapter number), then one `step` per chapter in
+    # CHAPTERS, which drives the masthead's count and tide
     welcome
     validate_offline_repo
     check_network
-    select_disk
-    configure_user
-    configure_extras
-    partition_disk
-    format_partitions
-    mount_partitions
-    install_base
+    step disk;     select_disk
+    step you;      configure_user
+    step machine;  configure_extras
+    # The one gate: nothing is written to any disk before the typed name
+    # in review_plan; partition_disk is called from here only
+    step review;   review_plan
+    step prepare;  partition_disk; format_partitions; mount_partitions
+    step base;     install_base
     # Swap must exist before configure_system generates the initramfs and
     # grub.cfg, which bake in the hibernation resume offset
-    configure_swap
-    configure_system
-    install_extras
-    install_aur_packages
-    # Before the dotfiles: their setup scripts and autostart may use these
-    run_user_installs
-    setup_dotfiles
-    finish
+    step system;   configure_swap; configure_system
+    # Apps before extras: the online AUR step bootstraps yay, which
+    # nvidia-setup's legacy-driver path needs (its driver is in the AUR).
+    # User installs before the dotfiles: their setup scripts and autostart
+    # may use them
+    step apps;     install_aur_packages; run_user_installs
+    step extras;   install_extras
+    step dotfiles; setup_dotfiles; restore_pacman_conf
+    step 'done';   finish
 }
 
 main "$@"

@@ -15,3 +15,9 @@ work/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Console font for tests/tty-render.py (fetched, not committed)
+tests/*.psf.gz
+
+# Python bytecode (from importing or compiling tests/tty-render.py)
+__pycache__/

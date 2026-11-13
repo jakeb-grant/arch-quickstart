@@ -4,7 +4,8 @@
 # ==============================================================================
 # Sourced by nvidia-setup, intel-setup, amd-setup, bluetooth-setup,
 # printer-setup, firewall-setup and dotfiles-setup. Not used by
-# hyprland-install, which has its own gum-styled logging.
+# hyprland-install, which has its own logging helpers (plain printf with the
+# installer's glyphs and colour roles).
 #
 # Environment variables honored by these helpers:
 #   CHROOT_TARGET - Target mount point (e.g., "/mnt") for installer mode
@@ -12,12 +13,16 @@
 #
 # ==============================================================================
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Colors, only on a terminal: a log or a pipe gets plain text
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    CYAN='\033[0;36m'
+    NC='\033[0m' # No Color
+else
+    RED='' GREEN='' YELLOW='' CYAN='' NC=''
+fi
 
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -134,7 +139,7 @@ aur_install() {
             if [[ -z "$CHROOT_USER" ]]; then
                 error "CHROOT_USER not set - cannot install AUR packages in chroot"
             fi
-            arch-chroot "$CHROOT_TARGET" sudo -u "$CHROOT_USER" $aur_helper -S --noconfirm --needed "${packages[@]}"
+            arch-chroot "$CHROOT_TARGET" sudo -u "$CHROOT_USER" -H $aur_helper -S --noconfirm --needed "${packages[@]}"
         else
             # Normal system: check if running as root
             if [[ $EUID -eq 0 ]]; then
@@ -142,7 +147,7 @@ aur_install() {
                 if [[ -n "$SUDO_USER" ]]; then
                     sudo -u "$SUDO_USER" $aur_helper -S --noconfirm --needed "${packages[@]}"
                 else
-                    error "Cannot install AUR packages as root. Run the setup script with sudo as a normal user."
+                    error "AUR packages can't build as root: run this with sudo as a normal user"
                 fi
             else
                 $aur_helper -S --noconfirm --needed "${packages[@]}"

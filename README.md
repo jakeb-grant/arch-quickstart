@@ -26,23 +26,44 @@ If using Ventoy, boot the ISO in **GRUB2 mode**:
 
 ### 2. The Installer
 
-The TUI installer launches automatically and guides you through:
+The TUI installer launches automatically. It is drawn for the Linux console it runs on (16 colours, an 80x25 screen, a 256-glyph font). Every screen after the welcome opens with a small `◆ arch quickstart` masthead showing the chapter as `n of 10 · name` (the network check, before the chapters, shows `hyprland on arch` instead). The line of water under it rolls as a wave through the finished chapters.
 
-#### Disk Selection
-- Lists all available disks (NVMe, SATA, eMMC, etc.), excluding the USB stick the installer booted from
-- Requires double confirmation before wiping
+The welcome screen shows the route in two acts:
+- **You answer:** disk · you · machine · review. Nothing is written to any disk in this part. Ctrl-C stops cleanly anywhere in it, and so does Esc at a menu or text prompt (at a yes/no question, Esc means no).
+- **Then it runs:** prepare · base · system · apps · extras · dotfiles. Normally nothing asks for input until the dotfiles chapter, where the screen flashes to call you back.
 
-#### System Configuration
-- **Hostname**: Text input, pre-filled with default (configurable)
-- **Username**: Pre-filled with default (configurable)
-- **Password**: Enter and confirm
-- **Disk encryption**: Optional LUKS encryption (can use same password)
-- **Timezone**: Defaults to `America/Denver`
-- **Git config**: Pre-filled, editable
+Before the chapters it checks the network (and, on the offline ISO, the offline repository).
 
 #### Network
 - Auto-detects ethernet connection
 - If no connection, offers WiFi setup with network selection
+- The offline ISO needs no network; only a remote dotfiles repo would
+
+#### Disk Selection
+- Lists all available disks (NVMe, SATA, eMMC, etc.), excluding the USB stick the installer booted from
+- Shows the chosen disk's current partitions and asks "Erase /dev/…?" as a first check. Nothing is erased there: the erase waits until you type the disk's name on the [review screen](#review)
+
+#### System Configuration
+- **Hostname**: Text input, pre-filled with default (configurable)
+- **Username**: Pre-filled with default (configurable)
+- **Password**: Enter and confirm (a typo asks again, up to three times)
+- **Disk encryption**: Optional LUKS encryption (can use same password)
+- **Timezone**: Defaults to `America/Denver`
+- **Git config**: Pre-filled, editable
+
+#### Graphics and Firewall
+- Detects the GPUs and recommends a driver setup (`nvidia-setup`, `intel-setup`, `amd-setup`, or none)
+- Firewall: everything closed, with SSH, HTTP/HTTPS and KDE Connect as optional openings (`x` toggles)
+
+#### Review
+Every answer on one card (disk and what it becomes, machine, locale, git, graphics, firewall), with a plain "Nothing has been written yet":
+- **Install on /dev/X**, **Change the disk**, **Change you**, **Change machine**, or **Quit, nothing written**. A changed chapter starts from your earlier answers, so Enter keeps each one (the passwords are typed again).
+- Install shows the disk as it is now and asks you to **type its name** (`nvme0n1`, or `/dev/nvme0n1`). This proves you read which disk. It is the only gate: nothing touches the disk before it, and normally nothing asks for input after it until dotfiles. A wrong name asks again; the third wrong name stops with nothing written.
+
+#### While It Runs
+- The long steps (pacstrap, the setup scripts, the AUR builds, the user installs, chezmoi) print straight to the screen, between two labelled rules. The closing rule gives the outcome and the time taken, e.g. `── ■ 1,284 packages ──── 3m 41s ──`.
+- Once GRUB is verified, a checkpoint card says the machine can boot on its own. From then on a step that fails prints a warning and the installer carries on, rather than stopping a bootable install.
+- The console has no scrollback, so every warning that comes with a fix is also kept for the finish screen.
 
 #### What Gets Created
 
@@ -72,6 +93,8 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 #### Packages Installed
 About 110 packages from the official repos and 15 from the AUR (built with yay) provide a base Hyprland desktop. Without dotfiles the system boots to Hyprland with a terminal (Kitty), yazi and Hyprland's example keybinds. The desktop shell and theming come from your dotfiles (see `dotfiles.conf`), so customize the package lists to preload whatever your dotfiles need. The author's dotfiles use Strand as their shell, which the installer adds as a user install.
 
+The online ISO builds the AUR packages as your user, and makepkg and yay call `sudo`; the builds can outlast sudo's password timeout, so they get the same temporary passwordless rule as the dotfiles step (below), removed as soon as they finish. If that rule cannot be set up, the installer says so, and the builds may ask for your password. A package that fails to build never stops the installation, and neither does Ctrl-C during the builds: the installer prints the `yay` command to finish the job after rebooting.
+
 #### User Installs
 After the AUR packages, the installer runs the [user installs](#archisoairootfsusrlocalshareuser-installs---user-installs): tools installed for your user by a script, outside pacman. Two ship with this repo:
 - `strand` - the Strand shell, from its edge channel (on the offline ISO, the edge build bundled when the ISO was built)
@@ -82,7 +105,7 @@ A failed user install never stops the installation; it prints the command to ret
 #### Dotfiles
 Last, the installer applies your dotfiles with `chezmoi init --apply`, as your user, in the new system:
 - It stays attached to the terminal, so chezmoi's prompts (`promptChoiceOnce` and the like) are asked as usual.
-- The dotfiles' scripts can use `sudo` without a password for this step only. The rule allowing it (`/etc/sudoers.d/90-arch-quickstart-install`) is removed as soon as chezmoi finishes, and again by the installer's exit handler if the installer stops early. Only a power cut during the step can leave it behind.
+- The dotfiles' scripts can use `sudo` without a password while chezmoi runs (the online AUR builds get the same rule while they run). The rule allowing it (`/etc/sudoers.d/90-arch-quickstart-install`) is removed as soon as chezmoi finishes, and again by the installer's exit handler if the installer stops early. Only a power cut during the step can leave it behind.
 - It runs with `--keep-going`, so one failing script does not stop the others. A failed `run_once_`/`run_onchange_` script is not recorded, and `chezmoi apply` after rebooting runs it again.
 - `ARCH_QUICKSTART_INSTALL=1` is set, so templates and scripts can tell they are running from the installer, in a chroot where nothing of the new system is booted yet.
 - Ctrl-C stops chezmoi, not the installation.
@@ -96,12 +119,20 @@ Last, the installer applies your dotfiles with `chezmoi init --apply`, as your u
 - GRUB bootloader (UEFI), plus a fallback copy at `EFI/BOOT/BOOTX64.EFI` so the disk boots even if the firmware's boot entry is lost (CMOS reset, board swap)
 - Services enabled: iwd, systemd-resolved, greetd
 
+#### The Finish Screen
+A receipt on one screen: the machine and user, the disk, the desktop (package count, dotfiles applied or not), how long the install took, and (when there is room) the time per chapter. Below it are the things left to do after rebooting, each with the exact command where there is one (`yay -S hyprshot`, `chezmoi apply`, ...), or "Nothing left to do. Clean run." Then it asks whether to reboot. The same receipt is saved as plain text to `~/install-report.txt` and `/var/log/arch-quickstart-install.txt`.
+
+#### If Something Fails
+Before the checkpoint, a failure stops the installer. It prints what failed (for an unexpected error, the exact command and line) and, if the disk was already touched, unmounts the target and closes the LUKS container. For an unexpected error, or any other stop once the disk was touched (except Ctrl-C, which only cleans up), it then shows a card: where it stopped, what that usually means, the state of the disk, and what to do next. A check that stops it before the disk is touched (no disk found, the disk's name mistyped three times) says why in one line, with nothing written. Re-running `hyprland-install` is safe and starts over.
+
 ### 3. First Boot
 
 After reboot:
 1. greetd/tuigreet login screen appears
 2. Log in with your username/password
 3. Hyprland starts automatically
+
+Anything the finish screen listed as left to do is in `~/install-report.txt`.
 
 ### 4. Post-Install Setup
 
@@ -224,6 +255,20 @@ sudo mkarchiso -v -w /tmp/archiso-work -o /tmp/archiso-out .
 
 For offline builds with pre-loaded packages, use the GitHub Actions workflow.
 
+## Testing
+
+An ISO build takes about an hour, so most checks run without one:
+
+```bash
+bash tests/s5-runner.sh all     # installer scenarios, no VM and no root
+bash tests/glyph-lint.sh        # every character the installer prints draws on tty1
+python3 tests/tty-render.py capture.ans screen.png   # see a screen as tty1 shows it
+```
+
+- `tests/s5-runner.sh` runs the real installer functions against stubbed commands, as root inside a user namespace (`unshare -rm`) with throwaway `/mnt` and `/root`, so nothing on the host is touched. It covers pacstrap, the AUR, user-install and dotfiles steps, swap, teardown, the review gate, the finish receipt and the failure card.
+- `tests/glyph-lint.sh` (also run in CI) fails on any character outside the glyphs the live ISO's console font draws as intended, and on gum options or defaults that would draw ones it lacks. A missing glyph shows up as a small square, so it is easy to miss by eye.
+- `tests/tty-render.py` draws captured terminal output (ANSI escapes included) pixel for pixel through that font, at 80x25 by default. It also reports missing glyphs and lines over 79 columns. It needs `ter-116n.psf.gz`, which is not in the repo. The script's header shows how to fetch it from the `terminus-font` package without installing it.
+
 ## Configuration Files
 
 ### `install.conf` - Installation Defaults
@@ -344,6 +389,10 @@ archiso/
 ├── grub/                      # GRUB (UEFI) config
 ├── syslinux/                  # Syslinux (BIOS) config
 └── efiboot/                   # systemd-boot entries
+tests/
+├── s5-runner.sh               # Installer scenarios, rootless (see Testing)
+├── glyph-lint.sh              # Every printed character draws on tty1
+└── tty-render.py              # Draws captured output through the console font
 ```
 
 ## Creating Releases

@@ -24,6 +24,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 | VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; pushed, ISO run 28693998988). Acceptance run 2026-07-05 (offline ISO, 4G RAM, fresh disk + factory OVMF vars): install end-to-end ✅, disk-only boot via fallback loader ✅ (V2 closed), swap activate/release lifecycle ✅ (V3b closed; online-ISO build-OOM stress not yet re-run). |
 | Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D4 done, D5 open (VM run) |
+| Installer UI (2026-11-12) | U1–U21 + F1–F7 — "the tide": glyphs and colours tty1 can draw, a masthead whose wave tracks the chapters, framed streamed steps, a review screen with the typed disk name as the one gate, a finish receipt. Spec in `UI-NOTES.md` (its "Build status" lists deviations). See section below. | 🚧 All 21 built 2026-11-13 in 5 sections, each verified (s5 50/50, glyph lint in CI, renders through ter-116n); F1, F2, F4, F5, F7 fixed; F3 fixed in code, its VM check in D5; F6, F8 fixed; the VM look open (in D5) |
 
 ---
 
@@ -185,6 +186,10 @@ The three GPU scripts share ~120 lines byte-for-byte (`run_cmd`, `pkg_install`, 
 ### R2. Single `read_package_list()` helper
 Package-list parsing exists in at least three forms (robust `while read` in the installer's AUR/offline paths, weak `grep` in `install_base`, a third variant in `validate-packages.sh`). Unify them so the installer, setup scripts, and validator agree on comments/whitespace/CR handling (fixes M3, reduces M10 risk).
 **Status:** ✅ DONE. Installer side with M3 (one helper, all 5 sites); `validate-packages.sh` now carries a byte-identical copy of the helper (Section 5 / M10); setup scripts have no list-parse sites (Section 4 / R1). Note: the workflow's inline `mapfile < <(grep -v ...)` sites in build-iso.yml still use the weak parse, but every list they read is pre-validated by the rewritten validator in the same run.
+
+### R3. Decompose the 1,490-line installer monolith
+Error handling leans entirely on a global `set -e` + ERR trap that pauses on `read`, which is fragile for a disk-wiping installer; several `|| true` calls mask failures. Consider explicit success checks + cleanup around the destructive steps (pacstrap, mkfs, cryptsetup, grub-install) and splitting into sourced modules. Lower priority than the correctness fixes above.
+**Status:** ✅ FIXED 2026-07-02 as **harden-in-place** (deliberately no module split — the file is well-sectioned; moving 1,500 working lines around an untestable-locally disk-wiping script was judged all risk, no payoff; see `R3-NOTES.md` for the full diagnosis, verified review findings, and per-section log). Four reviewed sections: EXIT-trap cleanup-on-failure teardown incl. idempotent re-run pre-flight (`09463c4`); Esc/Ctrl-C at prompts = clean cancel instead of ERR-trap error (`845dd55`); explicit verification after mkfs/cryptsetup/sed-HOOKS/GRUB + silent-failure fixes (`d4d9c7a`); live-boot USB excluded from the target-disk list (`9160d7d`). Each section: lint at CI severity, scenario harness against the real code (22 scenarios total), 1-2 agent diff review with findings fixed. Note kept from earlier review: bash does not expand variables in `$BASH_COMMAND`, so the ERR trap cannot leak passwords — preserve this property in any future trap edits.
 
 ## VM acceptance test findings (2026-07-03)
 
@@ -377,8 +382,170 @@ dotfiles apply shows chezmoi's prompts and no sudo password prompts; no
 `90-arch-quickstart-install` left in `/etc/sudoers.d`; `rust` user install
 and zed-strand built (online).
 
+Installer UI on the same runs (from `UI-NOTES.md`, "Verification
+toolkit"; add `-monitor unix:/tmp/qmon.sock,server,nowait` to the QEMU line
+and capture the real console with `screendump`):
+- The wave and the flash look right: the masthead's tide on every screen,
+  the wordmark rising on welcome, the tide rolling in on finish, and the
+  reverse-video flash at the dotfiles chapter.
+- The palette (OSC P) takes effect on virtio-vga: the screen turns ink-dark
+  at start. If it does not, the default VGA colours must still keep the
+  roles apart.
+- With `stty rows 25 cols 80` set first, welcome, the review screen and the
+  finish receipt each fit in 25 rows, prompt included.
+- No unexpected `■` anywhere. A glyph missing from the font draws as `■`,
+  not `�`, so look for squares outside the done marks and gum's selected
+  prefix.
+- `locale` and `locale -a | grep -i c.utf` on tty1 (settles F6 and Ground
+  truth 4).
+- Esc and Ctrl-C: Esc at a choose or input prompt (the review menu, the
+  typed disk name) cancels cleanly, exit 130, disk untouched; Esc at a
+  confirm means "no"; Ctrl-C during the AUR builds, the user installs and
+  chezmoi stops only that step. Also from the review: "Change you" there
+  and back, a wrong disk name three times (die, `lsblk` unchanged), a right
+  one runs the install.
+- Online run: no sudo password prompt during the AUR builds (F3; they run
+  under the temporary NOPASSWD rule), and the rule is gone afterwards.
+- After the reboot, `~/install-report.txt` and
+  `/var/log/arch-quickstart-install.txt` exist and match the receipt.
+
 ---
 
-### R3. Decompose the 1,490-line installer monolith
-Error handling leans entirely on a global `set -e` + ERR trap that pauses on `read`, which is fragile for a disk-wiping installer; several `|| true` calls mask failures. Consider explicit success checks + cleanup around the destructive steps (pacstrap, mkfs, cryptsetup, grub-install) and splitting into sourced modules. Lower priority than the correctness fixes above.
-**Status:** ✅ FIXED 2026-07-02 as **harden-in-place** (deliberately no module split — the file is well-sectioned; moving 1,500 working lines around an untestable-locally disk-wiping script was judged all risk, no payoff; see `R3-NOTES.md` for the full diagnosis, verified review findings, and per-section log). Four reviewed sections: EXIT-trap cleanup-on-failure teardown incl. idempotent re-run pre-flight (`09463c4`); Esc/Ctrl-C at prompts = clean cancel instead of ERR-trap error (`845dd55`); explicit verification after mkfs/cryptsetup/sed-HOOKS/GRUB + silent-failure fixes (`d4d9c7a`); live-boot USB excluded from the target-disk list (`9160d7d`). Each section: lint at CI severity, scenario harness against the real code (22 scenarios total), 1-2 agent diff review with findings fixed. Note kept from earlier review: bash does not expand variables in `$BASH_COMMAND`, so the ERR trap cannot leak passwords — preserve this property in any future trap edits.
+## Installer UI (2026-11-12)
+
+The installer's look and feel, designed in `UI-NOTES.md` ("the tide": a
+`◆ arch quickstart` masthead over a line of water drawn with the console's
+`⎽⎼⎻⎺` scan-line glyphs, which rolls as a wave through the finished
+chapters). The design was checked against what tty1 really draws: the
+Linux console, the 256-glyph ter-116n font, 80x25, gum 2.0.2. Jacob
+approved all of it, optional items included. Built 2026-11-13 in five
+sections. After each one: s5 `all`, shellcheck and the glyph lint, screens
+rendered through the ISO's font, and an independent verify pass with
+mutation checks. s5 grew from 17 scenarios to 47. Not yet seen on real
+hardware or a VM (D5 checklist above). `UI-NOTES.md`'s "Build status" block
+lists the built-with-deviation details.
+
+**Foundation**
+- **✅ U1 glyph fixes** — gum's prefixes, cursor and spinner set to glyphs
+  in the font (`▶ · ■`, the ASCII `line` spinner); `--spinner dot` and the
+  double/rounded borders gone; gum's `Choose:` header and help lines off,
+  prompts on the 3-column gutter. Firewall copy says "x toggles" (space
+  does nothing in gum 2.0.2).
+- **✅ U2 status vocabulary and colour roles** — `info`/`doing`/`success`/
+  `warn`/`die`/`you` are plain printf with one mark per meaning (`■ ! × ·`)
+  and colours by ANSI index, on only when stdout is a terminal. Fixes
+  `warn` and `die` both landing on the same red.
+- **✅ U3 console palette** — `console_palette` sets the console's own
+  palette (OSC P) on tty1 only. Whether it takes on virtio-vga is a D5 check.
+- **✅ U4 glyph lint + tty renderer** — `tests/glyph-lint.sh` (in CI) fails
+  on any character outside the shape-checked kit, on gum flags that draw
+  missing glyphs, and on a gum-using script that does not export the
+  replacements. `nvidia-setup`'s `═` banner is now `─`.
+  `tests/tty-render.py` draws ANSI output through ter-116n and reports
+  missing glyphs and lines over 79 columns (the font is fetched, not
+  committed).
+
+**The spine and the tide**
+- **✅ U5 step spine** — `step ID` in `main()`; one `CHAPTERS` list drives
+  the count, the masthead labels, the welcome route and the review's route.
+- **✅ U6 masthead and tide** — 3 rows instead of 8; the hostname in
+  "■ HOST boots on its own" is cut to fit, or the note is dropped.
+- **✅ U7 clear policy** — every screen before the disk starts clean; after
+  it only a new chapter clears.
+- **✅ U8 welcome hero** — the wordmark on the tide, the route in two acts,
+  the offline note, `Let's go` / `Not now`.
+- **✅ U9 animations** — the wordmark rises out of the water; the tide rolls
+  in on finish. Real console only.
+
+**The long middle**
+- **✅ U10 stream frames** — labelled rules around pacstrap, the setup
+  scripts, the AUR builds, the user installs and chezmoi, never around
+  their I/O; the closing rule gives the outcome ("1,284 packages", "1 of 2
+  built") and the time. The package count is taken after pacstrap.
+- **✅ U11 ledger** — a `■` line after each `gum spin`; sub-steps are dim
+  `·` breadcrumbs printed before the command.
+- **✅ U12 checkpoint** — a card after the GRUB check ("orion can boot on its
+  own now"), `BOOTABLE=1`; the reassurance is repeated in the extras/apps
+  rules, because the masthead scrolls off.
+- **✅ U13 step-away / your turn** — "Nothing to answer until dotfiles"
+  after the gate and on the base/apps rules; the screen flashes at the
+  dotfiles chapter. Shown on both ISOs, not offline only, since the online
+  AUR builds now run under the temporary NOPASSWD rule (F3).
+- **✅ U14 per-package rules** — `── AUR 3/24 · hyprshot ──` in the offline
+  loop, the generated online script and the user installs loop.
+
+**The ending and the voice**
+- **✅ U15 notes** — `note WHAT FIX` next to every warning that has a fix
+  after the reboot, carried to the receipt (more sites than the spec: the
+  setup scripts, post-GRUB writes, greetd, a minimal system).
+- **✅ U16 finish receipt** — one screen: a card with host, user, disk,
+  desktop and "built in", the chapter times, the notes with their commands
+  or "Nothing left to do. Clean run.", the reboot prompt. It fits 25 rows
+  by dropping padding, then the times, then cutting the notes (the report
+  holds the full text). The offline `pacman.conf` restore moved to
+  `restore_pacman_conf`. Fixes F7.
+- **✅ U17 voice pass** — no `!`-ending messages or `WARNING:` prefixes;
+  "AUR packages installed" only on a clean run (a partial run's closing
+  rule says "1 of 2 built"); the offline no-network line fixed; `cancelled`
+  says whether anything was written. Fixes F4, F5.
+- **✅ U18 install report** — the receipt as plain text in
+  `/var/log/arch-quickstart-install.txt` and `~/install-report.txt`; the
+  card says where it was saved.
+
+**The gate**
+- **✅ U19 review screen, typed disk name** — chapter 4: every answer on one
+  card, then Install / Change the disk / Change you / Change machine /
+  Quit. The summaries and "Proceed?" confirms in `configure_user` and
+  `configure_extras` are gone, and so is the typed `yes` in `select_disk`.
+  "Install" leads to the erase gate on a screen of its own: the
+  `lsblk` view, then the disk's name typed out, the last prompt before
+  `DISK_TOUCHED=1`. A chapter changed from the review starts from its
+  earlier answers, so Enter keeps each one (inputs pre-filled, confirms
+  defaulting to the earlier choice, GPU and firewall pre-selected;
+  passwords typed again); Cancel at the disk's "Erase?" keeps the old disk.
+- **✅ U20 re-ask on typos** — passwords, the passphrase and the typed disk
+  name re-ask up to three times, then the old `die`; all before the disk.
+- **✅ U21 failure card** — built, not deferred: `fail_card` in `on_exit`,
+  after cleanup and before the pause, in a `set +e` subshell, printf only.
+  It shows where the run stopped, what failed, what that usually means,
+  the disk's state and the next step. The `ERROR: Command failed at line N`
+  line still prints first (s5 `err-card`, `err-heredoc`, `err-cancel`).
+
+**Found on the way**
+- **✅ F1 (FIXED)** — Ctrl-C during the AUR step aborted a bootable install.
+  Both AUR branches now use the `trap ':' INT` bracket; Ctrl-C stops the
+  current build only, and the receipt notes what is left (`aur-*-ctrl-c`).
+- **✅ F2 (FIXED)** — `install_extras` ran its setup scripts bare under
+  `set -e` after GRUB. Each now runs through `run_setup` (warn, note,
+  carry on, its own INT bracket), and the post-GRUB writes in
+  `configure_system` warn and note instead of firing ERR (`ext-*`,
+  `cfg-*`).
+- **F3 (FIXED in code, VM check open)** — online AUR builds would prompt
+  for the user's sudo password. They now run under the same temporary,
+  visudo-checked NOPASSWD drop-in as the dotfiles step, removed right after
+  (and by `on_exit`); if it cannot be granted, a warning says the builds
+  may ask. Confirm on the D5 online run.
+- **✅ F4 (FIXED by U17)** — "AUR packages installed!" printed after
+  failures.
+- **✅ F5 (FIXED by U17)** — offline with no network, the installer said
+  dotfiles would be skipped; preloaded dotfiles still apply.
+- **✅ F6 (FIXED — deleted, with its `profiledef.sh` entry)** — `.automated_script.sh` never ran (its `locale-gen`,
+  `pacman-key`, `setfont`): root's shell is bash, there is no `.zlogin`,
+  and `.bash_profile` only starts the installer. Each job is done
+  elsewhere: glibc's locale-gen hook at ISO build time (`locale.gen`,
+  `locale.conf`), `pacman-init.service` and `install_base` for the
+  keyring, `vconsole.conf` for the font. Still check `locale` on tty1 in
+  D5 (`width()`/`fit()` measure in `C.UTF-8` either way).
+- **✅ F7 (FIXED by U16)** — `finish()` overflowed 25 rows (about 37).
+- **✅ F8 (FIXED in code, 2026-11-13 — apps now runs before extras; the online GPU setup gets the temporary sudo rule; `aur_install` runs yay with `-H`; `nvidia-setup`'s legacy branch first removes the official `nvidia-utils`/`lib32-nvidia-utils` (`-Rdd`, exact-name match), which steam pulls in as its default `vulkan-driver` providers and which conflict with the 580xx utils, on both ISOs; the AUR step now runs `pacman -Syu` first, since the GPU scripts' sync no longer precedes it. Needs pre-Turing hardware to confirm)** — online ISO, pre-Turing NVIDIA: `install_extras` (chapter
+  8) runs `nvidia-setup`, whose legacy path calls `aur_install`
+  (`nvidia-setup:327`), but yay is only bootstrapped by
+  `install_aur_packages` in chapter 9. So the legacy driver never installs
+  during the install. Since F2 this warns and leaves the retry command
+  (`nvidia-setup` after the reboot) instead of aborting. The F8 review
+  then found the legacy install also failed on both ISOs on a conflict
+  with the official `nvidia-utils` (see the status above). Fix options: run the
+  extras chapter after apps (no AUR package needs the GPU driver at build
+  time; the spine, welcome route and receipt follow `main`'s order), or
+  have `install_extras` defer only `nvidia-setup` to after the AUR step
+  when online. Pre-existing; found by the S0 builder.
