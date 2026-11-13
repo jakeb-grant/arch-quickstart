@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # s5 harness — rootless scenario tests for hyprland-install (V3 surface:
 # AUR per-package tolerance, install-time swap lifecycle, teardown ordering;
-# D2: user installs, run through the real user-installs-setup).
+# D2: user installs, run through the real user-installs-setup; D3: the
+# dotfiles apply and its temporary passwordless sudo).
 #
 # Runs INSIDE `unshare -rm` (root in a user namespace): tmpfs is mounted over
 # /mnt and /root so the real installer functions run against a throwaway
@@ -17,6 +18,8 @@
 #   aur-online-bootstrap-git-fails aur-online-bootstrap-mkpkg-fails
 #   aur-offline-one-fails swap-swapon-ok swap-swapon-fails
 #   teardown-active-swap ui-online-one-fails ui-offline-payload ui-none
+#   dot-preloaded-ok dot-preloaded-fails dot-init-fails dot-ctrl-c
+#   dot-exit-cleanup
 #
 # Gotcha (learned the hard way): `command -v` falls back to non-executable
 # PATH entries, so host binaries (e.g. an installed yay) are hidden by giving
@@ -29,6 +32,8 @@ SCENARIOS=(
     aur-offline-one-fails swap-swapon-ok swap-swapon-fails
     teardown-active-swap
     ui-online-one-fails ui-offline-payload ui-none
+    dot-preloaded-ok dot-preloaded-fails dot-init-fails dot-ctrl-c
+    dot-exit-cleanup
 )
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -67,6 +72,12 @@ if [[ "$MODE" == exec ]]; then
         swap-*)     configure_swap ;;
         teardown-*) teardown_target ;;
         ui-*)       run_user_installs ;;
+        dot-exit-*) touch "$INSTALL_SUDOERS"; exit 1 ;;
+        # Checked here, before on_exit (which also removes it) can hide a
+        # missing cleanup in the step itself
+        dot-*)      setup_dotfiles
+                    [[ -e "$INSTALL_SUDOERS" ]] && echo "SUDOERS LEFT AFTER STEP"
+                    echo "INT trap after step: $(trap -p INT)" ;;
     esac
     exit 0
 fi
@@ -82,11 +93,11 @@ fi
 mount -t tmpfs none /mnt
 mount -t tmpfs none /root
 # User-install scenarios: the live ISO's hooks and payloads live here
-if [[ "$SCEN" == ui-* ]]; then
+if [[ "$SCEN" == ui-* || "$SCEN" == dot-* ]]; then
     mount -t tmpfs none /usr/local/share
     mount -t tmpfs none /opt
 fi
-mkdir -p /mnt/home/testuser /mnt/swap /mnt/etc "$STUBS"
+mkdir -p /mnt/home/testuser /mnt/swap /mnt/etc/sudoers.d "$STUBS"
 touch "$CALLS"
 
 mkstub() { local n="$1"; shift; printf '%s\n' "#!/bin/bash" "$@" > "$STUBS/$n"; chmod +x "$STUBS/$n"; }
@@ -159,6 +170,22 @@ case "$1" in
         USER_INSTALLS_PAYLOADS="${p:+$root$p}" \
         exec unshare -U --map-user=1000 --map-group=1000 /bin/bash "$S_RUNNER" "${!#}"
     fi
+    # chezmoi: log its arguments and the temporary sudoers drop-in as it
+    # stands while chezmoi runs
+    if [[ " $* " == *" chezmoi "* ]]; then
+      echo "chezmoi-args: $*" >> /root/calls.log
+      f=$root/etc/sudoers.d/90-arch-quickstart-install
+      [[ -e $f ]] && echo "sudoers-during: $(cat "$f")" >> /root/calls.log
+      # chezmoi writes its config once init has rendered it
+      if [[ "${S_CHEZMOI_CONFIG:-1}" == 1 ]]; then
+        mkdir -p "$root/home/testuser/.config/chezmoi"
+        touch "$root/home/testuser/.config/chezmoi/chezmoi.toml"
+      fi
+      # Ctrl-C at a prompt: the terminal signals the whole foreground
+      # group, the installer (this stub parent) included
+      if [[ "${S_CHEZMOI_SIGINT:-0}" == 1 ]]; then kill -INT "$PPID"; exit 130; fi
+      exit "${S_CHEZMOI_RC:-0}"
+    fi
     # stubs-only PATH so `command -v yay` sees exactly what the harness put
     # in /root/stubs (the host may have yay installed)
     script="${!#}"
@@ -199,6 +226,11 @@ case "$SCEN" in
     ui-online-one-fails)              export S_UI_FAIL="b" ;;
     ui-offline-payload)               mkdir -p /opt/user-installs/a; touch /opt/user-installs/a/blob ;;
     ui-none)                          : ;;
+    dot-preloaded-ok)                 mkdir -p /opt/dotfiles/.git ;;
+    dot-preloaded-fails)              mkdir -p /opt/dotfiles/.git; export S_CHEZMOI_RC=1 ;;
+    dot-init-fails)                   mkdir -p /opt/dotfiles/.git; export S_CHEZMOI_RC=1 S_CHEZMOI_CONFIG=0 ;;
+    dot-ctrl-c)                       mkdir -p /opt/dotfiles/.git; export S_CHEZMOI_SIGINT=1 S_CHEZMOI_CONFIG=0 ;;
+    dot-exit-cleanup)                 : ;;
     *) echo "unknown scenario: $SCEN"; exit 2 ;;
 esac
 
@@ -286,6 +318,32 @@ case "$SCEN" in
         grep -qx "b ran PAYLOAD= pwd=/mnt/home/testuser" "$log" || fail "b (no payload) got one"
         grep -q "chown -R testuser: /var/tmp/user-installs-payloads" "$CALLS" || fail "payload not chowned in the chroot"
         [[ -e /mnt/var/tmp/user-installs-payloads ]] && fail "staged payloads left in the target" ;;
+    dot-preloaded-ok)
+        want_rc0
+        want "Dotfiles applied successfully!"
+        grep -q -- "chezmoi-args: .*sudo -u testuser -H env ARCH_QUICKSTART_INSTALL=1 chezmoi init --apply --keep-going$" "$CALLS" \
+            || fail "chezmoi not run as the user with -H, ARCH_QUICKSTART_INSTALL and --keep-going"
+        grep -qx "sudoers-during: testuser ALL=(ALL:ALL) NOPASSWD: ALL" "$CALLS" || fail "no temporary sudoers while chezmoi ran"
+        want_not "SUDOERS LEFT AFTER STEP" ;;
+    dot-preloaded-fails)
+        want_rc0
+        want "Some dotfiles did not apply (see above). After rebooting, run: chezmoi apply"
+        want_not "Dotfiles applied successfully!"
+        want_not "ERROR: Command failed"
+        want_not "SUDOERS LEFT AFTER STEP" ;;
+    dot-init-fails)
+        want_rc0
+        want "After rebooting, run: chezmoi init --apply"
+        want_not "SUDOERS LEFT AFTER STEP" ;;
+    dot-ctrl-c)
+        want_rc0
+        want "After rebooting, run: chezmoi init --apply"
+        want "INT trap after step: trap -- 'exit 130' SIGINT"
+        want_not "SUDOERS LEFT AFTER STEP"
+        want_not "ERROR: Command failed" ;;
+    dot-exit-cleanup)
+        [[ $rc -eq 1 ]] || fail "exit code $rc, expected 1"
+        [[ -e /mnt/etc/sudoers.d/90-arch-quickstart-install ]] && fail "on_exit left the temporary sudoers behind" ;;
     ui-none)
         want_rc0
         want "No user installs"

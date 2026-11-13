@@ -24,6 +24,11 @@ on_exit() {
     # A reflexive Ctrl-C at the error report must not truncate cleanup;
     # default handling is restored for the pause below so Ctrl-C works there
     trap '' INT TERM
+    # Never leave the dotfiles step's temporary passwordless sudo behind,
+    # whatever way the installer ends
+    if (( BASH_SUBSHELL == 0 )); then
+        rm -f "$INSTALL_SUDOERS" 2>/dev/null || true
+    fi
     if (( rc != 0 && BASH_SUBSHELL == 0 )); then
         if (( DISK_TOUCHED == 1 )); then
             cleanup_on_failure
@@ -49,6 +54,10 @@ export GUM_INPUT_CURSOR_FOREGROUND="#89b4fa"
 export GUM_INPUT_PROMPT_FOREGROUND="#cba6f7"
 export GUM_CONFIRM_PROMPT_FOREGROUND="#f9e2af"
 export GUM_SPIN_SPINNER_FOREGROUND="#89b4fa"
+
+# Temporary passwordless sudo for the new user while the dotfiles apply
+# (apply_dotfiles); removed right after, and by on_exit on any exit
+INSTALL_SUDOERS="/mnt/etc/sudoers.d/90-arch-quickstart-install"
 
 # Package list location
 PACKAGES_FILE="/root/target-packages.x86_64"
@@ -1643,7 +1652,10 @@ run_user_installs() {
 
     # One at a time, so the failures can be named. As with the AUR packages,
     # the system is bootable by now: a failure warns and never aborts
+    # Ctrl-C stops the user install running, not the installer (see
+    # apply_dotfiles)
     local failed=() name
+    trap ':' INT
     for name in "${names[@]}"; do
         if ! arch-chroot /mnt sudo -u "$USERNAME" -H \
                 env USER_INSTALLS_PAYLOADS="$stage" \
@@ -1651,6 +1663,7 @@ run_user_installs() {
             failed+=("$name")
         fi
     done
+    trap 'exit 130' INT
 
     [[ -z "$stage" ]] || rm -rf "/mnt${stage:?}" || warn "Could not remove /mnt$stage"
 
@@ -1669,6 +1682,55 @@ run_user_installs() {
 # -----------------------------------------------------------------------------
 # Dotfiles Setup (Optional)
 # -----------------------------------------------------------------------------
+
+# apply_dotfiles [REPO]: chezmoi init --apply as the new user in the target,
+# from REPO or (none given) the source already copied into ~/.local/share/
+# chezmoi. Returns chezmoi's status; never aborts the installer.
+apply_dotfiles() {
+    # The dotfiles' setup scripts call sudo; let them, without a password,
+    # for this step only
+    if ! { printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$USERNAME" > "$INSTALL_SUDOERS" \
+            && chmod 440 "$INSTALL_SUDOERS" \
+            && arch-chroot /mnt visudo -cf "${INSTALL_SUDOERS#/mnt}" >/dev/null; }; then
+        rm -f "$INSTALL_SUDOERS" || true
+        warn "Could not grant temporary sudo - the dotfiles' scripts may ask for your password"
+    fi
+
+    # Attached to the terminal on purpose: chezmoi's templates may prompt
+    # (promptChoiceOnce and friends, e.g. a laptop/desktop choice) and the
+    # dotfiles' scripts may ask questions. Never wrap this in gum spin or
+    # redirect its input or output.
+    # --keep-going: one failing script no longer stops the rest, and a failed
+    # run_once_/run_onchange_ script is not recorded, so `chezmoi apply`
+    # retries it.
+    # ARCH_QUICKSTART_INSTALL=1 tells templates and scripts they run from the
+    # installer, in a chroot: nothing of the target is booted yet.
+    # Ctrl-C at one of chezmoi's prompts reaches the installer too, whose INT
+    # trap would end a bootable install as a failure. A no-op handler (not
+    # an ignore, which chezmoi would inherit) lets Ctrl-C stop chezmoi alone.
+    local rc=0
+    trap ':' INT
+    arch-chroot /mnt sudo -u "$USERNAME" -H env ARCH_QUICKSTART_INSTALL=1 \
+        chezmoi init --apply --keep-going "$@" || rc=$?
+    trap 'exit 130' INT
+
+    rm -f "$INSTALL_SUDOERS" || warn "Could not remove $INSTALL_SUDOERS - delete it after rebooting"
+    return "$rc"
+}
+
+# The retry advice after a failed apply. chezmoi writes its config once init
+# has rendered it (prompts answered): from then on `chezmoi apply` retries the
+# parts that failed. Before that, init must run again so its prompts are asked.
+dotfiles_retry_hint() {
+    local home="/mnt/home/$USERNAME"
+    if compgen -G "$home/.config/chezmoi/chezmoi.*" > /dev/null; then
+        warn "Some dotfiles did not apply (see above). After rebooting, run: chezmoi apply"
+    elif [[ -d "$home/.local/share/chezmoi/.git" ]]; then
+        warn "Dotfiles did not apply (see above). After rebooting, run: chezmoi init --apply"
+    else
+        warn "After rebooting, run: dotfiles-setup $1"
+    fi
+}
 
 setup_dotfiles() {
     header
@@ -1692,12 +1754,11 @@ setup_dotfiles() {
             arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.local"
 
             info "Applying dotfiles with chezmoi..."
-            arch-chroot /mnt sudo -u "$USERNAME" chezmoi init --apply || {
-                warn "Dotfiles setup encountered an error."
-                warn "You can run 'chezmoi init --apply' after rebooting."
-                sleep 2
+            if ! apply_dotfiles; then
+                dotfiles_retry_hint ""
+                sleep 3
                 return
-            }
+            fi
 
             success "Dotfiles applied successfully!"
             sleep 1
@@ -1749,13 +1810,11 @@ setup_dotfiles() {
     info "Initializing dotfiles from: $dotfiles_repo"
     echo
 
-    # Run chezmoi init as the user in the chroot
-    arch-chroot /mnt sudo -u "$USERNAME" chezmoi init "$dotfiles_repo" --apply || {
-        warn "Dotfiles setup encountered an error."
-        warn "You can run 'dotfiles-setup $dotfiles_repo' after rebooting."
-        sleep 2
+    if ! apply_dotfiles "$dotfiles_repo"; then
+        dotfiles_retry_hint "$dotfiles_repo"
+        sleep 3
         return
-    }
+    fi
 
     success "Dotfiles applied successfully!"
     sleep 1

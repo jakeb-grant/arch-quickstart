@@ -7,8 +7,9 @@
 #   2. Every AUR package exists (RPC v5, POSTed in chunks)
 #   3. No AUR-listed package actually lives in the official repos (misplaced)
 #   4. No duplicates within a list or across the target-system lists
-#   5. Binaries referenced by exec-once in the shipped Hyprland config resolve
-#      to a listed package (requires a synced pacman files database)
+#   5. Binaries the shipped Hyprland config autostarts (hl.exec_cmd in its
+#      hyprland.start handler) resolve to a listed package (requires a synced
+#      pacman files database)
 #   6. Literal package names installed by the setup scripts are present in the
 #      lists that feed the offline repository
 #
@@ -207,13 +208,19 @@ check_dupes_within "the target-system lists (target/setup/aur/setup-aur)" \
     "${TARGET_PKGS[@]}" "${SETUP_PKGS[@]}" "${AUR_PKGS[@]}" "${SETUP_AUR_PKGS[@]}"
 
 # =============================================================================
-# Check 4: exec-once binaries in the shipped Hyprland config resolve to a
-# listed package (catches autostarting a program nothing installs)
+# Check 4: binaries the shipped Hyprland config autostarts resolve to a
+# listed package (catches autostarting a program nothing installs). The
+# config is Lua (Hyprland 0.57+): autostart is the hl.exec_cmd("...") calls
+# with a literal command inside hl.on("hyprland.start", ...) up to the first
+# line ending in `end)`; comment lines are skipped. A command held in a
+# variable (hl.exec_cmd(cmd)) is not seen: keep the skel's autostart literal.
 # =============================================================================
 echo ""
-echo "Checking exec-once references in shipped Hyprland config..."
-if [[ -z "$(pacman -Fq /usr/bin/bash 2>/dev/null)" ]]; then
-    note "pacman files database not synced (pacman -Fy) - skipping exec-once checks"
+echo "Checking autostart commands in shipped Hyprland config..."
+if [[ ! -f "$HYPR_CONF_DIR/hyprland.lua" ]]; then
+    fail "shipped Hyprland config $HYPR_CONF_DIR/hyprland.lua is missing"
+elif [[ -z "$(pacman -Fq /usr/bin/bash 2>/dev/null)" ]]; then
+    note "pacman files database not synced (pacman -Fy) - skipping autostart checks"
 else
     while IFS= read -r cmd; do
         # First word of the command line; env-var assignments have no path
@@ -228,11 +235,16 @@ else
         owner=$(pacman -Fq "$path" 2>/dev/null | head -1)
         owner="${owner##*/}"
         if [[ -z "$owner" ]]; then
-            note "exec-once target '$cmd' not found in any official package (AUR- or dotfiles-provided?)"
+            note "autostart target '$cmd' not found in any official package (AUR- or dotfiles-provided?)"
         elif ! in_target_system_lists "$owner"; then
-            fail "exec-once runs '$cmd' but its package '$owner' is in no package list"
+            fail "autostart runs '$cmd' but its package '$owner' is in no package list"
         fi
-    done < <(sed -n 's/^[[:space:]]*exec-once[[:space:]]*=[[:space:]]*//p' "$HYPR_CONF_DIR"/*.conf)
+    done < <(awk '/^[[:space:]]*--/ { next }
+                  /hl\.on\("hyprland\.start"/ { on = 1 }
+                  on { print }
+                  on && /end\)[[:space:]]*$/ { on = 0 }' \
+                 "$HYPR_CONF_DIR/hyprland.lua" \
+             | sed -n 's/.*hl\.exec_cmd("\([^"]*\)").*/\1/p')
 fi
 
 # =============================================================================

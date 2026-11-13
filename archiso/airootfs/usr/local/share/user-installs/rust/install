@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# The stable Rust toolchain as rustup's default. rustup (target-packages)
+# starts with no toolchain, so `cargo` fails until one is chosen; the
+# dotfiles build with it (the Strand extension for Zed). Running it again
+# updates the toolchain. No offline payload: on the offline ISO this needs
+# the network, else it fails and says to retry after rebooting.
+set -euo pipefail
+
+command -v rustup >/dev/null || { echo "rust: rustup is not installed" >&2; exit 1; }
+rustup toolchain install stable --profile default
+rustup default stable

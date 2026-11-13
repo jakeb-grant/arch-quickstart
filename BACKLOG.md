@@ -23,7 +23,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 | VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; pushed, ISO run 28693998988). Acceptance run 2026-07-05 (offline ISO, 4G RAM, fresh disk + factory OVMF vars): install end-to-end ✅, disk-only boot via fallback loader ✅ (V2 closed), swap activate/release lifecycle ✅ (V3b closed; online-ISO build-OOM stress not yet re-run). |
-| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D2 done, D3–D5 open |
+| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D3 done, D4–D5 open |
 
 ---
 
@@ -299,13 +299,47 @@ non-pacman installs**, not a one-off.
   could read the token from `.git/config` — pre-existing); the channel file
   follows install.sh's absolute-only `XDG_DATA_HOME` rule.
 
-### D3. Dotfiles apply in the chroot, and the fallback skel
-`chezmoi init --apply` runs in the chroot, but the dotfiles' `run_onchange`
-scripts want interactive sudo (Thunderbolt resume, IPU7 camera, GPU
-symlinks) and `install-zed-strand` needs cargo with `wasm32-wasip2`. Check
-whether apply aborts or half-applies, and make it degrade cleanly. Skel is
-still `hyprland.conf`; Hyprland 0.57 ships a Lua example config — check
-whether `.conf` is still read and convert if not.
+### D3. ✅ Dotfiles apply in the chroot, and the fallback skel
+`chezmoi init --apply` runs in the chroot. The dotfiles' scripts call sudo
+(greetd, Chromium policies, Thunderbolt resume, IPU7 camera, GPU symlinks),
+so each asked for the password mid-install; `install-zed-strand` needs a Rust
+toolchain, which a fresh system lacks, and chezmoi stopped at that first
+failing script, so the camera and Thunderbolt scripts after it never ran.
+- **Fix (2026-11-12):** `apply_dotfiles` runs `chezmoi init --apply
+  --keep-going` as the user (`sudo -u USER -H`), still attached to the
+  terminal so templates can prompt (`promptChoiceOnce`, e.g. a future
+  laptop/desktop choice) and scripts can ask questions. `--keep-going`: one
+  failing script no longer stops the rest; failed `run_once_`/`run_onchange_`
+  scripts are not recorded, so the retry hint is `chezmoi apply`. A temporary
+  `sudoers.d/90-arch-quickstart-install` (NOPASSWD for the new user,
+  visudo-checked) covers the step and is removed after it and in `on_exit`.
+  `ARCH_QUICKSTART_INSTALL=1` tells templates and scripts they run from the
+  installer's chroot. `dotfiles-setup` also uses `--keep-going`.
+- New `rust` user install: rustup's stable toolchain as default (online
+  only; on the offline ISO it fails with the retry hint).
+- Skel: Hyprland 0.57 reads only `hyprland.lua` (no `.conf` path in the
+  binary), so the `.conf` is replaced by the 0.57 example config with kitty,
+  SUPER+E yazi, SUPER+Return/SUPER+Q, natural scroll; `Hyprland
+  --verify-config` passes. The validator's autostart check reads the Lua
+  (`hl.exec_cmd("...")` in `hl.on("hyprland.start", ...)`, comments skipped).
+  Without dotfiles there is still no polkit agent (by design: it is
+  Strand's).
+- For platform-specific dotfiles: a template can prompt (works in the
+  installer) or read `/sys/class/dmi/id/chassis_type` (readable in the
+  chroot), then gate a script as `run_onchange_setup-gpu-symlinks` does.
+- Verified: 3 new s5 scenarios (`dot-preloaded-ok`, `dot-preloaded-fails`,
+  `dot-exit-cleanup`), mutation-checked (the post-step sudoers check was
+  tightened when on_exit masked a missing cleanup); lint; validator.
+- Review fixes: the retry hint keys on chezmoi's config (`chezmoi apply`
+  once init has rendered it, `chezmoi init --apply` before, so its prompts
+  are asked again); Ctrl-C at a chezmoi prompt or during a user install now
+  stops that program only (a no-op INT handler for the step — before, the
+  installer's `exit 130` trap ended the bootable install as a failure and
+  skipped `finish`); the skel's playerctl media keys (nothing installs
+  playerctl) are replaced by the old Print/SHIFT+Print grim screenshots; the
+  validator fails on a missing `hyprland.lua` and ends the autostart range
+  at an indented `end)`. Scenarios `dot-init-fails`, `dot-ctrl-c` added
+  (17 total), the Ctrl-C one mutation-checked.
 
 ### D4. Docs
 README still describes Ghostty, quickshell-git, polkit-gnome. Once D1–D3
@@ -313,7 +347,10 @@ land, the dotfiles README's "until they catch up" caveat can go (other repo).
 
 ### D5. VM acceptance
 Online ISO at 4G RAM (also exercises the open V3 build-OOM case), then
-offline ISO.
+offline ISO. Check: Strand installed and running at first login; the
+dotfiles apply shows chezmoi's prompts and no sudo password prompts; no
+`90-arch-quickstart-install` left in `/etc/sudoers.d`; `rust` user install
+and zed-strand built (online).
 
 ---
 

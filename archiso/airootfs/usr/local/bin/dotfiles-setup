@@ -64,12 +64,13 @@ if [[ -d "$HOME/.local/share/chezmoi" ]]; then
     echo
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
         info "Updating and applying dotfiles..."
-        chezmoi update --apply
+        chezmoi update --apply --keep-going
     fi
 else
     # Initialize and apply
     info "Initializing chezmoi with $REPO..."
-    chezmoi init "$REPO" --apply
+    # --keep-going: a failing setup script does not stop the rest
+    chezmoi init "$REPO" --apply --keep-going
 fi
 
 echo
