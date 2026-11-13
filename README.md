@@ -7,7 +7,8 @@ A custom Arch Linux ISO with a TUI installer for a clean Hyprland desktop enviro
 ## Related Repositories
 
 - **[jakeb-grant/dotfiles](https://github.com/jakeb-grant/dotfiles)** - Personal dotfiles managed with chezmoi. The installer can optionally apply these during installation.
-- See the section of the README on configuration files for additional detail. Your dotfiles repo must be managed with chezmoi and you must make sure that all Arch packages you want on your base system are contained in either `archiso/airootfs/root/target-packages.x86_64`(for packages contained in the standard repos) or `archiso/airootfs/root/aur-packages.x86_64` (for AUR packages).
+- **[jakeb-grant/strand](https://github.com/jakeb-grant/strand)** - The Wayland shell those dotfiles use (bar, launcher, notifications, lock screen, polkit prompt). It is not a pacman package; the installer installs it as a [user install](#archisoairootfsusrlocalshareuser-installs---user-installs).
+- See the section of the README on configuration files for additional detail. Your dotfiles repo must be managed with chezmoi, and everything it needs must be installed by one of three lists: `archiso/airootfs/root/target-packages.x86_64` (packages in the official repos), `archiso/airootfs/root/aur-packages.x86_64` (AUR packages), or a user install in `archiso/airootfs/usr/local/share/user-installs/` (tools installed some other way, such as by their own install script).
 
 ## Installation Flow
 
@@ -69,7 +70,22 @@ Mount options: `noatime,compress=zstd,space_cache=v2`
 - RAM > 16GB: Capped at 16GB
 
 #### Packages Installed
-~90 packages providing a base Hyprland desktop, plus AUR packages via yay. The base system boots to Hyprland with a terminal (Ghostty) and sane keybinds; a bar, launcher, and theming are expected to come from your dotfiles (see `dotfiles.conf`) — customize the package lists to preload whatever your dotfiles need (e.g. `quickshell-git` is included for the author's setup).
+About 110 packages from the official repos and 15 from the AUR (built with yay) provide a base Hyprland desktop. Without dotfiles the system boots to Hyprland with a terminal (Kitty), yazi and Hyprland's example keybinds. The desktop shell and theming come from your dotfiles (see `dotfiles.conf`), so customize the package lists to preload whatever your dotfiles need. The author's dotfiles use Strand as their shell, which the installer adds as a user install.
+
+#### User Installs
+After the AUR packages, the installer runs the [user installs](#archisoairootfsusrlocalshareuser-installs---user-installs): tools installed for your user by a script, outside pacman. Two ship with this repo:
+- `strand` - the Strand shell, from its edge channel (on the offline ISO, the edge build bundled when the ISO was built)
+- `rust` - rustup's stable toolchain as the default (needs the network)
+
+A failed user install never stops the installation; it prints the command to retry it after rebooting.
+
+#### Dotfiles
+Last, the installer applies your dotfiles with `chezmoi init --apply`, as your user, in the new system:
+- It stays attached to the terminal, so chezmoi's prompts (`promptChoiceOnce` and the like) are asked as usual.
+- The dotfiles' scripts can use `sudo` without a password for this step only. The rule allowing it (`/etc/sudoers.d/90-arch-quickstart-install`) is removed as soon as chezmoi finishes, and again by the installer's exit handler if the installer stops early. Only a power cut during the step can leave it behind.
+- It runs with `--keep-going`, so one failing script does not stop the others. A failed `run_once_`/`run_onchange_` script is not recorded, and `chezmoi apply` after rebooting runs it again.
+- `ARCH_QUICKSTART_INSTALL=1` is set, so templates and scripts can tell they are running from the installer, in a chroot where nothing of the new system is booted yet.
+- Ctrl-C stops chezmoi, not the installation.
 
 #### System Configuration Applied
 - Locale: `en_US.UTF-8`
@@ -119,7 +135,7 @@ amd-setup       # AMD GPUs (standalone only)
 - Detects hybrid graphics (Intel/AMD + NVIDIA)
 - Configures early KMS modules in mkinitcpio
 - For hybrid: installs `prime-run` wrapper for GPU offloading
-- Adds Hyprland environment variables
+- Writes Hyprland environment variables to `~/.config/hypr/gpu-env.lua`, which the fallback config loads (dotfiles that manage `hyprland.lua` set their own, or add `pcall(require, "gpu-env")`)
 - Auto-enables multilib if needed
 
 **After nvidia-setup on hybrid graphics:**
@@ -133,7 +149,7 @@ prime-run glxinfo | grep "OpenGL renderer"
 ##### amd-setup / intel-setup Features
 - Installs Mesa, Vulkan, and VA-API drivers
 - Detects if NVIDIA is present and warns about hybrid
-- Adds Hyprland environment variables
+- Writes Hyprland environment variables to `~/.config/hypr/gpu-env.lua`, which the fallback config loads (dotfiles that manage `hyprland.lua` set their own, or add `pcall(require, "gpu-env")`)
 - Auto-enables multilib if needed
 
 ##### AMD ROCm (GPU Compute)
@@ -149,10 +165,11 @@ This requires network access as ROCm packages are not included in the offline IS
 #### System Features
 
 ```bash
-bluetooth-setup   # Bluetooth + Bluetui TUI
-printer-setup     # CUPS + drivers
-firewall-setup    # UFW with interactive rules
-dotfiles-setup    # Clone your dotfiles repo
+bluetooth-setup      # Bluetooth + Bluetui TUI
+printer-setup        # CUPS + drivers
+firewall-setup       # UFW with interactive rules
+dotfiles-setup       # Clone your dotfiles repo
+user-installs-setup  # Run the user installs again (all, or the ones named); also updates them
 ```
 
 ## ISO Variants
@@ -176,7 +193,8 @@ Two ISO variants are built automatically:
 - Includes all GPU drivers (NVIDIA, Intel, AMD) - correct ones installed based on detected hardware
 - Includes printer drivers, firewall, and Bluetooth packages
 - Includes pre-loaded dotfiles (optional)
-- Network only needed for: custom dotfiles from a different repo, or AMD ROCm compute packages
+- Includes what the user installs need offline (Strand's edge build, fetched when the ISO is built)
+- Network only needed for: custom dotfiles from a different repo, AMD ROCm compute packages, or user installs without an offline payload (`rust`)
 
 ## Building the ISO
 
@@ -218,7 +236,7 @@ GIT_USER_EMAIL="86214494+jakeb-grant@users.noreply.github.com"
 DEFAULT_TIMEZONE="America/Denver"
 DEFAULT_LOCALE="en_US.UTF-8"
 DEFAULT_KEYMAP="us"
-DEFAULT_FONT="ter-116n"
+DEFAULT_FONT=""          # console font; empty keeps the kernel default
 DEFAULT_SHELL="/bin/bash"
 ```
 
@@ -261,6 +279,22 @@ Packages included in the offline repository but **not auto-installed**. These ar
 
 This architecture allows the offline ISO to support any hardware configuration without installing unnecessary drivers. The correct packages are installed based on detected hardware during the setup phase.
 
+### `archiso/airootfs/usr/local/share/user-installs/` - User Installs
+
+Tools installed for one user by a script, outside pacman and the AUR (a shell's own installer, a release binary, a toolchain). Each is a directory:
+
+```
+user-installs/<name>/
+  install   run as the user, in ~; installs or updates the tool
+  fetch     optional; run in CI for the offline ISO, bundles what install needs
+```
+
+`install` runs as the new user (never root) and must be safe to run again, since running it again is how a user retries or updates. `PAYLOAD` holds the path to the bundled payload on the offline ISO and is empty otherwise; install from it when it is set, else from the network. A non-zero exit is reported, never fatal.
+
+`fetch` runs as `fetch DIR` while the offline ISO is built (curl, jq and `GITHUB_TOKEN` available) and downloads everything `install` needs into `DIR`, which lands at `/opt/user-installs/<name>/` on the ISO. A failing `fetch` fails the build. Without a `fetch`, `install` needs the network on the offline ISO too.
+
+The installer copies the directory to the installed system, where `user-installs-setup [name...]` runs them again. See [`user-installs/README.md`](archiso/airootfs/usr/local/share/user-installs/README.md) and the `strand` user install for an example.
+
 ### `archiso/packages.x86_64` - Live ISO Packages
 
 Packages included in the live environment (for installation/rescue).
@@ -280,25 +314,33 @@ archiso/
 │   │   │   ├── mirrorlist
 │   │   │   └── offline-pacman.conf  # Offline mode pacman config
 │   │   └── skel/.config/hypr/
-│   │       └── hyprland.conf  # Default Hyprland config
+│   │       └── hyprland.lua   # Fallback Hyprland config (used without dotfiles)
 │   ├── opt/
 │   │   ├── offline-repo/      # Pre-built packages (offline ISO only)
-│   │   └── dotfiles/          # Pre-cloned dotfiles (offline ISO only)
+│   │   ├── dotfiles/          # Pre-cloned dotfiles (offline ISO only)
+│   │   └── user-installs/     # User-install payloads, e.g. Strand (offline ISO only)
 │   ├── root/
 │   │   ├── install.conf       # Installer defaults
 │   │   ├── target-packages.x86_64  # Target system packages (always installed)
 │   │   ├── aur-packages.x86_64     # AUR packages (always installed)
 │   │   ├── setup-packages.x86_64   # Setup script packages (on-demand)
 │   │   └── setup-aur-packages.x86_64  # Setup AUR packages (on-demand)
-│   └── usr/local/bin/
-│       ├── hyprland-install   # Main TUI installer
-│       ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
-│       ├── intel-setup        # Intel driver setup
-│       ├── amd-setup          # AMD driver setup
-│       ├── bluetooth-setup    # Bluetooth setup
-│       ├── printer-setup      # CUPS setup
-│       ├── firewall-setup     # UFW setup
-│       └── dotfiles-setup     # Dotfiles deployment
+│   ├── usr/local/bin/
+│   │   ├── hyprland-install   # Main TUI installer
+│   │   ├── nvidia-setup       # NVIDIA driver setup (hybrid support)
+│   │   ├── intel-setup        # Intel driver setup
+│   │   ├── amd-setup          # AMD driver setup
+│   │   ├── bluetooth-setup    # Bluetooth setup
+│   │   ├── printer-setup      # CUPS setup
+│   │   ├── firewall-setup     # UFW setup
+│   │   ├── dotfiles-setup     # Dotfiles deployment
+│   │   └── user-installs-setup  # Runs the user installs
+│   ├── usr/local/lib/
+│   │   └── setup-common.sh    # Shared helpers for the setup scripts
+│   └── usr/local/share/user-installs/
+│       ├── README.md          # How to add a user install
+│       ├── strand/            # Strand shell (install + fetch)
+│       └── rust/              # rustup stable toolchain (install)
 ├── grub/                      # GRUB (UEFI) config
 ├── syslinux/                  # Syslinux (BIOS) config
 └── efiboot/                   # systemd-boot entries

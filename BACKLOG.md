@@ -23,7 +23,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 | VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; pushed, ISO run 28693998988). Acceptance run 2026-07-05 (offline ISO, 4G RAM, fresh disk + factory OVMF vars): install end-to-end ✅, disk-only boot via fallback loader ✅ (V2 closed), swap activate/release lifecycle ✅ (V3b closed; online-ISO build-OOM stress not yet re-run). |
-| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D3 done, D4–D5 open |
+| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D4 done, D5 open (VM run) |
 
 ---
 
@@ -340,10 +340,35 @@ failing script, so the camera and Thunderbolt scripts after it never ran.
   validator fails on a missing `hyprland.lua` and ends the autostart range
   at an indented `end)`. Scenarios `dot-init-fails`, `dot-ctrl-c` added
   (17 total), the Ctrl-C one mutation-checked.
+- Follow-up fix (found by the D4 docs fact-check): `configure_system` still
+  copied `skel/.config/hypr/hyprland.conf`, which D3 deleted, so every
+  install would have died at user creation (`c9df64d`, never pushed). It
+  copies `hyprland.lua` now, and the lint job checks that every `/etc/skel`
+  path the installer copies ships in `airootfs` (the check fails on
+  `c9df64d`). The GPU scripts appended hyprlang `env =` lines to
+  `hyprland.conf`; they now write Lua `hl.env` calls to
+  `~/.config/hypr/gpu-env.lua` (replaced each run, so never duplicated),
+  which the skel loads with `pcall(require, "gpu-env")`; a `hyprland.lua`
+  that does not load it gets a warning naming the line to add. Verified
+  with `Hyprland --verify-config` (a deliberately bad key in gpu-env.lua is
+  reported, so it is loaded).
 
-### D4. Docs
-README still describes Ghostty, quickshell-git, polkit-gnome. Once D1–D3
-land, the dotfiles README's "until they catch up" caveat can go (other repo).
+### D4. ✅ Docs
+README (2026-11-12): Strand linked under related repos; the three ways to
+install what the dotfiles need (official list, AUR list, user install);
+packages paragraph (about 110 official + 15 AUR, Kitty, no quickshell); new
+"User Installs" and "Dotfiles" steps in the installation flow (prompts,
+temporary sudo and when it can survive, `--keep-going`,
+`ARCH_QUICKSTART_INSTALL`, Ctrl-C); `user-installs-setup` among the setup
+scripts; the offline ISO's bundled payloads; `DEFAULT_FONT=""`; a
+configuration section for user installs; the directory tree (Lua skel,
+`/opt/user-installs`, `user-installs-setup`, `setup-common.sh`,
+`usr/local/share/user-installs/`); the GPU scripts' `gpu-env.lua`. Finish screen: Kitty, and the binds named as the fallback
+config's. Dotfiles README (other repo, left uncommitted beside Jacob's own
+work there): the "until they catch up" caveat replaced, `rustup` added to
+the dependencies, and the installer's sudo and `ARCH_QUICKSTART_INSTALL`
+noted. Push order: arch-quickstart first, so the dotfiles README is not
+ahead of the public package lists.
 
 ### D5. VM acceptance
 Online ISO at 4G RAM (also exercises the open V3 build-OOM case), then

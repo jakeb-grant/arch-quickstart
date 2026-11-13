@@ -1899,13 +1899,14 @@ PACMANCONF
         "  3. Hyprland will start automatically via greetd" \
         "" \
         "Useful keybinds (defaults):" \
-        "  SUPER + Enter    → Open terminal (Ghostty)" \
+        "  SUPER + Enter    → Open terminal (Kitty)" \
         "  SUPER + E        → File manager (yazi)" \
         "  SUPER + Q        → Close window" \
         "  SUPER + 1-9      → Switch workspace" \
         "" \
-        "This is a base Hyprland setup - a bar, launcher, and theming" \
-        "come from your dotfiles (see dotfiles.conf) and package lists."
+        "These are the fallback config's binds - with dotfiles applied," \
+        "your own replace them, and the shell (bar, launcher, lock" \
+        "screen) comes from your dotfiles (see dotfiles.conf)."
 
     echo
     # Release the target swapfile activated during configure_swap - active
