@@ -31,10 +31,8 @@ sof-firmware
 
 # Core
 hyprland
-# sddm
 greetd
 greetd-tuigreet
-# waybar
 hypridle
 hyprlock
 
@@ -45,20 +43,28 @@ qt5-wayland
 qt6-wayland
 
 # Desktop tooling
-cliphist
-polkit-gnome
+# (bar, launcher, notifications, polkit prompt and lock screen come from
+# Strand, which is not a pacman package; see the dotfiles)
+awww
 grim
 hyprpicker
+libqalculate
 slurp
-# swaync
+wf-recorder
 wl-clipboard
 wtype
+
+# Theming (adw-gtk-theme is the GTK3 base theme-switch recolours)
+adw-gtk-theme
+qt5ct
 
 # =============================================================================
 # Hardware Controls
 # =============================================================================
+bolt
 brightnessctl
 power-profiles-daemon
+udisks2
 
 # =============================================================================
 # Camera (MIPI webcams, e.g. Intel IPU7; relayed to a v4l2loopback device)
@@ -67,6 +73,8 @@ power-profiles-daemon
 # them up on matching hardware. Costs one extra DKMS build per kernel update.
 libcamera
 libcamera-ipa
+libcamera-tools
+pipewire-libcamera
 gst-plugin-libcamera
 gst-plugins-good
 v4l2loopback-dkms
@@ -102,7 +110,7 @@ bluez-utils
 # =============================================================================
 noto-fonts
 noto-fonts-emoji
-terminus-font
+ttf-ibm-plex
 ttf-jetbrains-mono-nerd
 ttf-material-symbols-variable
 
@@ -121,7 +129,7 @@ zsh
 # =============================================================================
 # Terminal & Editor
 # =============================================================================
-ghostty
+kitty
 nano
 zed
 
@@ -130,14 +138,18 @@ zed
 # =============================================================================
 freerdp
 gimp
+obs-studio
+obsidian
 steam
 vlc
+vlc-plugin-ffmpeg
 yazi
 
 # =============================================================================
 # Dev
 # =============================================================================
 bun
+caddy
 cloudflared
 docker
 docker-compose
@@ -149,6 +161,13 @@ lazydocker
 rustup
 shellcheck
 uv
+vale
+
+# =============================================================================
+# Virtualization
+# =============================================================================
+edk2-ovmf
+qemu-desktop
 
 # =============================================================================
 # System Monitoring
@@ -171,9 +190,12 @@ rebuild-detector
 # =============================================================================
 # CLI Utilities
 # =============================================================================
+7zip
 age
 chezmoi
 curl
+fd
+fzf
 imagemagick
 jq
 unzip

@@ -7,23 +7,18 @@
 # Yay AUR helper (always built first)
 yay-bin
 
-# Shell
-quickshell-git
-
-# Awww wallpaper system
-awww-git
+# Theming
+phinger-cursors
 
 # Dev tools
 bruno-bin
 claude-code
-railwayapp-cli
 
 # Applications
 1password
 1password-cli
 google-chrome
 localsend-bin
-obsidian-bin
 onlyoffice-bin
 slack-desktop
 spotify
@@ -35,7 +30,3 @@ v4l2-relayd
 
 # Utilities
 downgrade
-hyprpier-git
-pane-fm-git
-phylax-git
-upkeep-git
