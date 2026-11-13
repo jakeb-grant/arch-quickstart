@@ -1143,7 +1143,7 @@ EOF
     # Copy custom Hyprland config to user's home
     info "  Installing Hyprland config..."
     mkdir -p "/mnt/home/$USERNAME/.config/hypr"
-    cp /etc/skel/.config/hypr/hyprland.conf "/mnt/home/$USERNAME/.config/hypr/"
+    cp /etc/skel/.config/hypr/hyprland.lua "/mnt/home/$USERNAME/.config/hypr/"
     arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
 
     # Configure git for user

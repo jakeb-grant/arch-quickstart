@@ -214,30 +214,35 @@ ensure_multilib_and_sync() {
 # Hyprland configuration
 # =============================================================================
 
-# Append a block of settings (from stdin) to the user's hyprland.conf, once.
-# Usage: append_hyprland_env "<marker string>" <<'EOF' ... EOF
-# Skips with a warning if the marker is already in the file; if the file
-# doesn't exist, prints the block for the user to add manually.
-append_hyprland_env() {
-    local marker="$1" conf
-    conf="$(get_user_home)/.config/hypr/hyprland.conf"
+# Write the GPU's Hyprland environment (Lua hl.env calls, from stdin) to the
+# user's ~/.config/hypr/gpu-env.lua, replacing what an earlier run wrote, so
+# re-running a setup script never duplicates it. The fallback hyprland.lua
+# loads it with pcall(require, "gpu-env"); dotfiles that manage hyprland.lua
+# set these themselves, or can load it the same way.
+# Usage: write_hyprland_env "<what>" <<'EOF' ... EOF
+write_hyprland_env() {
+    local what="$1" user dir file
+    user="$(get_target_user)"
+    dir="$(get_user_home)/.config/hypr"
+    file="$dir/gpu-env.lua"
 
-    if [[ ! -f "$conf" ]]; then
-        warn "Hyprland config not found at $conf"
-        echo ""
-        warn "Add these lines manually to your hyprland.conf:"
-        echo ""
-        sed 's/^/  /'
-        return 0
+    mkdir -p "$dir"
+    {
+        echo "-- $what, written by $(basename "$0") (arch-quickstart)."
+        echo "-- Running it again replaces this file."
+        cat
+    } > "$file"
+    if [[ $EUID -eq 0 ]]; then
+        if [[ -n "$CHROOT_TARGET" ]]; then
+            run_cmd chown -R "$user:" "/home/$user/.config/hypr"
+        else
+            chown -R "$user:" "$dir"
+        fi
     fi
+    info "$what written to ~/.config/hypr/gpu-env.lua"
 
-    if grep -q "$marker" "$conf"; then
-        warn "$marker already present in hyprland.conf"
-        warn "Skipping to avoid duplicates. Please verify configuration manually."
-        return 0
+    if [[ -f "$dir/hyprland.lua" ]] && ! grep -q 'require.*gpu-env' "$dir/hyprland.lua"; then
+        warn "Your hyprland.lua does not load gpu-env.lua. To use it, add:"
+        warn '  pcall(require, "gpu-env")'
     fi
-
-    info "Adding $marker to hyprland.conf..."
-    cat >> "$conf"
-    info "Environment variables added to hyprland.conf"
 }

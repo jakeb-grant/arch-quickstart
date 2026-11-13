@@ -63,6 +63,9 @@ local fileManager = terminal .. " -e yazi"
 hl.env("XCURSOR_SIZE", "24")
 hl.env("HYPRCURSOR_SIZE", "24")
 
+-- The GPU's variables, written by nvidia-setup, intel-setup or amd-setup
+pcall(require, "gpu-env")
+
 
 -----------------------
 ----- PERMISSIONS -----

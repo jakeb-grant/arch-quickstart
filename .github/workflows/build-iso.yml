@@ -53,6 +53,16 @@ jobs:
             bash -n "$f"
           done
 
+      - name: Installer copies only skel files the ISO ships
+        # configure_system copies from the live ISO's /etc/skel; a renamed or
+        # removed file there fails every install at user creation
+        run: |
+          grep -o '/etc/skel/[^" ]*' archiso/airootfs/usr/local/bin/hyprland-install | sort -u |
+          while read -r path; do
+            echo "checking $path"
+            test -e "archiso/airootfs$path" || { echo "::error::hyprland-install copies $path, which archiso/airootfs does not ship"; exit 1; }
+          done
+
       - name: shellcheck
         # Only scripts we maintain; choose-mirror, livecd-sound and
         # Installation_guide are inherited from the upstream releng profile.

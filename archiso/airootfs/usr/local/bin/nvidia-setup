@@ -13,7 +13,7 @@
 #
 # Environment variables for chroot-aware operation:
 #   CHROOT_TARGET   - Target mount point (e.g., "/mnt") for installer mode
-#   CHROOT_USER     - Username to configure (for hyprland.conf)
+#   CHROOT_USER     - Username to configure (for ~/.config/hypr/gpu-env.lua)
 #   NONINTERACTIVE  - Skip confirmation prompts when set to "1"
 #   DETECTED_NVIDIA - Pre-detected NVIDIA GPU info (skips detection)
 #   DETECTED_INTEL  - Pre-detected Intel GPU info (for hybrid detection)
@@ -274,7 +274,7 @@ echo ""
 echo "System modifications:"
 echo "  - /etc/modprobe.d/nvidia.conf (DRM modeset)"
 echo "  - /etc/mkinitcpio.conf (early KMS modules)"
-echo "  - ~/.config/hypr/hyprland.conf (environment variables)"
+echo "  - ~/.config/hypr/gpu-env.lua (environment variables)"
 if [[ -n "$HYBRID_TYPE" ]]; then
     echo "  - /usr/local/bin/prime-run (PRIME wrapper script)"
 fi
@@ -438,33 +438,33 @@ fi
 header "Configuring Hyprland Environment"
 
 if [[ -n "$HYBRID_TYPE" ]]; then
-    append_hyprland_env "NVIDIA environment variables" <<'EOF'
+    write_hyprland_env "NVIDIA environment variables" <<'EOF'
 
-# ==============================================================================
-# NVIDIA environment variables (hybrid graphics)
-# ==============================================================================
-env = LIBVA_DRIVER_NAME,nvidia
-env = __GLX_VENDOR_LIBRARY_NAME,nvidia
-env = NVD_BACKEND,direct
+-- ==============================================================================
+-- NVIDIA environment variables (hybrid graphics)
+-- ==============================================================================
+hl.env("LIBVA_DRIVER_NAME", "nvidia")
+hl.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+hl.env("NVD_BACKEND", "direct")
 
-# Electron/Chromium native Wayland support (reduces flickering)
-env = ELECTRON_OZONE_PLATFORM_HINT,auto
+-- Electron/Chromium native Wayland support (reduces flickering)
+hl.env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
 
-# Uncomment below if you experience multi-monitor issues on hybrid graphics:
-# env = AQ_DRM_DEVICES,/dev/dri/card1:/dev/dri/card0
+-- Uncomment below if you experience multi-monitor issues on hybrid graphics:
+-- hl.env("AQ_DRM_DEVICES", "/dev/dri/card1:/dev/dri/card0")
 EOF
 else
-    append_hyprland_env "NVIDIA environment variables" <<'EOF'
+    write_hyprland_env "NVIDIA environment variables" <<'EOF'
 
-# ==============================================================================
-# NVIDIA environment variables
-# ==============================================================================
-env = LIBVA_DRIVER_NAME,nvidia
-env = __GLX_VENDOR_LIBRARY_NAME,nvidia
-env = NVD_BACKEND,direct
+-- ==============================================================================
+-- NVIDIA environment variables
+-- ==============================================================================
+hl.env("LIBVA_DRIVER_NAME", "nvidia")
+hl.env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+hl.env("NVD_BACKEND", "direct")
 
-# Electron/Chromium native Wayland support (reduces flickering)
-env = ELECTRON_OZONE_PLATFORM_HINT,auto
+-- Electron/Chromium native Wayland support (reduces flickering)
+hl.env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
 EOF
 fi
 

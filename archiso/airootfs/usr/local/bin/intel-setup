@@ -12,7 +12,7 @@
 #
 # Environment variables for chroot-aware operation:
 #   CHROOT_TARGET   - Target mount point (e.g., "/mnt") for installer mode
-#   CHROOT_USER     - Username to configure (for hyprland.conf)
+#   CHROOT_USER     - Username to configure (for ~/.config/hypr/gpu-env.lua)
 #   NONINTERACTIVE  - Skip confirmation prompts when set to "1"
 #   DETECTED_INTEL  - Pre-detected Intel GPU info (skips detection)
 #   DETECTED_NVIDIA - Pre-detected NVIDIA GPU info (for hybrid warning)
@@ -219,15 +219,15 @@ pkg_install "${PACKAGES[@]}"
 # ==============================================================================
 header "Configuring Hyprland Environment"
 
-append_hyprland_env "Intel environment variables" <<'EOF'
+write_hyprland_env "Intel environment variables" <<'EOF'
 
-# ==============================================================================
-# Intel environment variables
-# ==============================================================================
-env = LIBVA_DRIVER_NAME,iHD
+-- ==============================================================================
+-- Intel environment variables
+-- ==============================================================================
+hl.env("LIBVA_DRIVER_NAME", "iHD")
 
-# Electron/Chromium native Wayland support
-env = ELECTRON_OZONE_PLATFORM_HINT,auto
+-- Electron/Chromium native Wayland support
+hl.env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
 EOF
 
 # ==============================================================================
