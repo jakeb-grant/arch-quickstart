@@ -1272,12 +1272,19 @@ EOF
         mkdir -p /mnt/usr/local/lib
         cp /usr/local/lib/setup-common.sh /mnt/usr/local/lib/
     fi
-    for script in nvidia-setup intel-setup amd-setup bluetooth-setup printer-setup firewall-setup dotfiles-setup; do
+    for script in nvidia-setup intel-setup amd-setup bluetooth-setup printer-setup firewall-setup dotfiles-setup user-installs-setup; do
         if [[ -f "/usr/local/bin/$script" ]]; then
             cp "/usr/local/bin/$script" "/mnt/usr/local/bin/"
             chmod +x "/mnt/usr/local/bin/$script"
         fi
     done
+
+    # The user installs ride along so user-installs-setup can run them
+    # (run_user_installs, below) and the user can re-run them to update
+    if [[ -d /usr/local/share/user-installs ]]; then
+        mkdir -p /mnt/usr/local/share
+        cp -r /usr/local/share/user-installs /mnt/usr/local/share/
+    fi
 
     # dotfiles.conf rides along so dotfiles-setup can default to the
     # configured repo on the installed system
@@ -1593,6 +1600,73 @@ AURSCRIPT
 }
 
 # -----------------------------------------------------------------------------
+# User Installs (tools installed per user outside pacman, e.g. Strand)
+# -----------------------------------------------------------------------------
+
+run_user_installs() {
+    header
+    info "Running user installs (tools installed outside pacman)..."
+    echo
+
+    local hooks_dir="/usr/local/share/user-installs"
+    local names=() dir
+    for dir in "$hooks_dir"/*/; do
+        [[ -f "$dir/install" ]] && names+=("$(basename "$dir")")
+    done
+
+    if [[ ${#names[@]} -eq 0 ]]; then
+        info "No user installs"
+        return 0
+    fi
+
+    info "User installs: ${names[*]}"
+    echo
+
+    # Payloads bundled on the offline ISO are staged inside the target, where
+    # the chroot can read them. Nothing here may abort the (bootable) install:
+    # a failed copy falls back to the network
+    local stage=""
+    if [[ -d /opt/user-installs ]]; then
+        stage="/var/tmp/user-installs-payloads"
+        if mkdir -p "/mnt$stage" && cp -r /opt/user-installs/. "/mnt$stage/"; then
+            # The user exists only in the target's passwd, so chown in the
+            # chroot. Not fatal: the payload stays world-readable, which is
+            # all install scripts need
+            arch-chroot /mnt chown -R "$USERNAME:" "$stage" \
+                || warn "Could not hand the bundled payloads to $USERNAME"
+        else
+            warn "Could not stage the bundled payloads - user installs will use the network"
+            rm -rf "/mnt${stage:?}" || true
+            stage=""
+        fi
+    fi
+
+    # One at a time, so the failures can be named. As with the AUR packages,
+    # the system is bootable by now: a failure warns and never aborts
+    local failed=() name
+    for name in "${names[@]}"; do
+        if ! arch-chroot /mnt sudo -u "$USERNAME" -H \
+                env USER_INSTALLS_PAYLOADS="$stage" \
+                /usr/local/bin/user-installs-setup "$name"; then
+            failed+=("$name")
+        fi
+    done
+
+    [[ -z "$stage" ]] || rm -rf "/mnt${stage:?}" || warn "Could not remove /mnt$stage"
+
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        echo
+        warn "WARNING: ${#failed[@]} user install(s) failed: ${failed[*]}"
+        warn "After rebooting, run: user-installs-setup ${failed[*]}"
+        sleep 3
+        return 0
+    fi
+
+    success "User installs done!"
+    sleep 1
+}
+
+# -----------------------------------------------------------------------------
 # Dotfiles Setup (Optional)
 # -----------------------------------------------------------------------------
 
@@ -1829,6 +1903,8 @@ main() {
     configure_system
     install_extras
     install_aur_packages
+    # Before the dotfiles: their setup scripts and autostart may use these
+    run_user_installs
     setup_dotfiles
     finish
 }

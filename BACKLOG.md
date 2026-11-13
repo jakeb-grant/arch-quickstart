@@ -23,6 +23,7 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 | VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; pushed, ISO run 28693998988). Acceptance run 2026-07-05 (offline ISO, 4G RAM, fresh disk + factory OVMF vars): install end-to-end ✅, disk-only boot via fallback loader ✅ (V2 closed), swap activate/release lifecycle ✅ (V3b closed; online-ISO build-OOM stress not yet re-run). |
+| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D2 done, D3–D5 open |
 
 ---
 
@@ -234,6 +235,85 @@ exit). Three fixes fell out — full evidence and per-item plans in
   and unmounted cleanly (V3b lifecycle ✅). Caveat: offline ISO installs
   prebuilt AUR packages — the rustc/cc1plus build-under-OOM case still
   needs an online-ISO run at 4G to be exercised in anger.
+
+---
+
+## Strand-era revisit (2026-11-12)
+
+The dotfiles (`~/.local/share/chezmoi`) moved to Strand (the desktop shell, a
+per-user install outside pacman), Kitty and a Lua Hyprland config
+(Hyprland 0.57). Their README's dependency list said these package lists
+"predate Strand and Kitty". Compared against Jacob's `pacman -Qe` on
+2026-11-12.
+
+### D1. ✅ Package lists out of date
+- **Removed (target):** ghostty, cliphist, polkit-gnome (Strand shows the
+  polkit prompt), terminus-font (Jacob uses JetBrains Mono Nerd; the console
+  font default is now empty, the live ISO keeps terminus for itself).
+- **Removed (AUR):** quickshell-git, hyprpier-git, pane-fm-git, phylax-git,
+  upkeep-git (Upkeep is rebuilt in Strand); awww-git and obsidian-bin are
+  replaced by the official `awww` and `obsidian`; railwayapp-cli dropped
+  (it lagged real releases; closes the accept-and-monitor checksum note).
+- **Added:** kitty, awww, bolt, adw-gtk-theme, qt5ct, wf-recorder,
+  libqalculate, obsidian, pipewire-libcamera, libcamera-tools, udisks2, fd,
+  fzf (`.bashrc` uses it; it was only a dependency of downgrade), 7zip,
+  ttf-ibm-plex, vlc-plugin-ffmpeg, obs-studio, qemu-desktop, edk2-ovmf,
+  caddy, vale; AUR phinger-cursors. pgadmin4-desktop left off (Jacob).
+- Skel `hyprland.conf`: terminal → kitty, polkit-gnome autostart removed
+  (stopgap until D3).
+
+### D2. ✅ Strand is not installed by the installer → general "user installs"
+`hyprland.lua` autostarts `strand run`; without Strand a fresh install has no
+bar, launcher, lock screen or polkit agent. Strand installs per user via its
+`install.sh` into `~/.local`. Jacob wanted a **general mechanism for
+non-pacman installs**, not a one-off.
+- **Fix (2026-11-12):** *user installs*, one directory per tool in
+  `airootfs/usr/local/share/user-installs/<name>/` with an `install` script
+  (run as the user in `~`; `PAYLOAD` set when the ISO bundles one) and an
+  optional `fetch` (run in CI for the offline ISO, into
+  `/opt/user-installs/<name>/`; a failed fetch fails the build). Contract in
+  that directory's README.
+- `user-installs-setup [name...]` runs them (refuses root) and ships to the
+  target so the user can retry or update. The installer's
+  `run_user_installs` runs after the AUR packages and before the dotfiles,
+  one at a time via `arch-chroot … sudo -u USER -H`, staging bundled
+  payloads under the target's `/var/tmp` (chowned in the chroot: the user
+  does not exist on the live ISO). Failures warn and name the retry command,
+  never fatal (same policy as V3).
+- `strand`: online, Strand's `install.sh --edge`; offline, `--from` the
+  bundled edge archive plus the `install.sh` from the same GitHub release,
+  then the channel file is set to `edge` (`--from` records `release`, so a
+  later plain re-run would otherwise switch to releases — a `--from FILE
+  --edge` in Strand's script would make this cleaner).
+- Verified: real fetch + checksum; real offline and online Strand installs
+  through the runner into a throwaway HOME (`strand --version`, channel
+  `edge`, re-run up to date); 3 new s5 scenarios (`ui-online-one-fails`,
+  `ui-offline-payload`, `ui-none`; the runner runs as uid 1000 in a nested
+  user namespace), mutation-checked; CI lint and shellcheck cover the new
+  scripts.
+- 2-agent review: fixed — payload staging and cleanup could trip the ERR
+  teardown (now guarded, falls back to the network); the token reached
+  curl's argv (now on stdin); `fetch` had no retry for an edge build
+  mid-upload (5 tries, 30 s apart); the offline job's checkout now sets
+  `persist-credentials: false` (AUR builds in that container had sudo and
+  could read the token from `.git/config` — pre-existing); the channel file
+  follows install.sh's absolute-only `XDG_DATA_HOME` rule.
+
+### D3. Dotfiles apply in the chroot, and the fallback skel
+`chezmoi init --apply` runs in the chroot, but the dotfiles' `run_onchange`
+scripts want interactive sudo (Thunderbolt resume, IPU7 camera, GPU
+symlinks) and `install-zed-strand` needs cargo with `wasm32-wasip2`. Check
+whether apply aborts or half-applies, and make it degrade cleanly. Skel is
+still `hyprland.conf`; Hyprland 0.57 ships a Lua example config — check
+whether `.conf` is still read and convert if not.
+
+### D4. Docs
+README still describes Ghostty, quickshell-git, polkit-gnome. Once D1–D3
+land, the dotfiles README's "until they catch up" caveat can go (other repo).
+
+### D5. VM acceptance
+Online ISO at 4G RAM (also exercises the open V3 build-OOM case), then
+offline ISO.
 
 ---
 

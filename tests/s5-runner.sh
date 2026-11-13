@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # s5 harness — rootless scenario tests for hyprland-install (V3 surface:
-# AUR per-package tolerance, install-time swap lifecycle, teardown ordering).
+# AUR per-package tolerance, install-time swap lifecycle, teardown ordering;
+# D2: user installs, run through the real user-installs-setup).
 #
 # Runs INSIDE `unshare -rm` (root in a user namespace): tmpfs is mounted over
 # /mnt and /root so the real installer functions run against a throwaway
@@ -15,7 +16,7 @@
 #   aur-online-all-ok aur-online-one-fails aur-online-bootstrap-ok
 #   aur-online-bootstrap-git-fails aur-online-bootstrap-mkpkg-fails
 #   aur-offline-one-fails swap-swapon-ok swap-swapon-fails
-#   teardown-active-swap
+#   teardown-active-swap ui-online-one-fails ui-offline-payload ui-none
 #
 # Gotcha (learned the hard way): `command -v` falls back to non-executable
 # PATH entries, so host binaries (e.g. an installed yay) are hidden by giving
@@ -27,10 +28,13 @@ SCENARIOS=(
     aur-online-bootstrap-git-fails aur-online-bootstrap-mkpkg-fails
     aur-offline-one-fails swap-swapon-ok swap-swapon-fails
     teardown-active-swap
+    ui-online-one-fails ui-offline-payload ui-none
 )
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 INSTALLER="$(dirname "$SELF")/../archiso/airootfs/usr/local/bin/hyprland-install"
+S_RUNNER="$(dirname "$SELF")/../archiso/airootfs/usr/local/bin/user-installs-setup"
+export S_RUNNER
 MODE="$1" SCEN="${2:-}"
 STUBS=/root/stubs
 CALLS=/root/calls.log
@@ -62,6 +66,7 @@ if [[ "$MODE" == exec ]]; then
         aur-*)      install_aur_packages ;;
         swap-*)     configure_swap ;;
         teardown-*) teardown_target ;;
+        ui-*)       run_user_installs ;;
     esac
     exit 0
 fi
@@ -76,6 +81,11 @@ if [[ "$(awk '{print $3; exit}' /proc/self/uid_map)" == 4294967295 ]]; then
 fi
 mount -t tmpfs none /mnt
 mount -t tmpfs none /root
+# User-install scenarios: the live ISO's hooks and payloads live here
+if [[ "$SCEN" == ui-* ]]; then
+    mount -t tmpfs none /usr/local/share
+    mount -t tmpfs none /opt
+fi
 mkdir -p /mnt/home/testuser /mnt/swap /mnt/etc "$STUBS"
 touch "$CALLS"
 
@@ -140,6 +150,15 @@ case "$1" in
     [[ " ${S_PACMAN_FAIL_PKGS:-} " == *" $pkg "* ]] && exit 1
     exit 0 ;;
   sudo)
+    # user-installs-setup: the real runner, against the hooks in the target, as
+    # uid 1000 (it refuses root) in a nested user namespace
+    if [[ " $* " == *" /usr/local/bin/user-installs-setup "* ]]; then
+      p=""
+      for a in "$@"; do [[ "$a" == USER_INSTALLS_PAYLOADS=* ]] && p="${a#*=}"; done
+      HOME="$root/home/testuser" USER_INSTALLS_DIR="$root/usr/local/share/user-installs" \
+        USER_INSTALLS_PAYLOADS="${p:+$root$p}" \
+        exec unshare -U --map-user=1000 --map-group=1000 /bin/bash "$S_RUNNER" "${!#}"
+    fi
     # stubs-only PATH so `command -v yay` sees exactly what the harness put
     # in /root/stubs (the host may have yay installed)
     script="${!#}"
@@ -148,6 +167,22 @@ case "$1" in
 esac'
 
 printf 'pkg1\npkg2\n' > /root/aur-packages.x86_64
+
+# User installs a and b, on the live ISO and copied to the target (as
+# configure_system does). Each logs what it saw; one in S_UI_FAIL fails
+mkhook() {
+    local d
+    for d in /usr/local/share/user-installs/$1 /mnt/usr/local/share/user-installs/$1; do
+        mkdir -p "$d"
+        printf '%s\n' 'echo "'"$1"' ran PAYLOAD=$PAYLOAD pwd=$PWD" >> "$HOME/hooks.log"' \
+            '[[ -z "$PAYLOAD" ]] || ls "$PAYLOAD" >> "$HOME/hooks.log"' \
+            '[[ " ${S_UI_FAIL:-} " != *" '"$1"' "* ]]' > "$d/install"
+    done
+}
+if [[ "$SCEN" == ui-* && "$SCEN" != ui-none ]]; then
+    mkhook a
+    mkhook b
+fi
 
 # Scenario knobs
 case "$SCEN" in
@@ -161,6 +196,9 @@ case "$SCEN" in
     swap-swapon-ok)                   : ;;
     swap-swapon-fails)                export S_SWAPON_FAIL=1 ;;
     teardown-active-swap)             : ;;
+    ui-online-one-fails)              export S_UI_FAIL="b" ;;
+    ui-offline-payload)               mkdir -p /opt/user-installs/a; touch /opt/user-installs/a/blob ;;
+    ui-none)                          : ;;
     *) echo "unknown scenario: $SCEN"; exit 2 ;;
 esac
 
@@ -228,6 +266,30 @@ case "$SCEN" in
         [[ -n $so ]] || fail "swapoff never called in teardown"
         [[ -n $um ]] || fail "umount never called in teardown"
         [[ -n $so && -n $um && $so -lt $um ]] || fail "swapoff ($so) not before umount ($um)" ;;
+    ui-online-one-fails)
+        log=/mnt/home/testuser/hooks.log
+        want_rc0
+        want "1 user install(s) failed: b"
+        want "After rebooting, run: user-installs-setup b"
+        want_not "User installs done!"
+        want_not "ERROR: Command failed"
+        grep -qx "a ran PAYLOAD= pwd=/mnt/home/testuser" "$log" || fail "a did not run in ~ without a payload"
+        grep -q "^b ran" "$log" || fail "b never ran" ;;
+    ui-offline-payload)
+        log=/mnt/home/testuser/hooks.log
+        want_rc0
+        want "User installs done!"
+        want_not "failed"
+        grep -qx "a ran PAYLOAD=/mnt/var/tmp/user-installs-payloads/a pwd=/mnt/home/testuser" "$log" \
+            || fail "a did not get its staged payload"
+        grep -qx "blob" "$log" || fail "a's payload was empty"
+        grep -qx "b ran PAYLOAD= pwd=/mnt/home/testuser" "$log" || fail "b (no payload) got one"
+        grep -q "chown -R testuser: /var/tmp/user-installs-payloads" "$CALLS" || fail "payload not chowned in the chroot"
+        [[ -e /mnt/var/tmp/user-installs-payloads ]] && fail "staged payloads left in the target" ;;
+    ui-none)
+        want_rc0
+        want "No user installs"
+        grep -q user-installs-setup "$CALLS" && fail "runner called with no user installs" ;;
 esac
 
 if (( pass )); then echo "PASS $SCEN"; else echo "FAIL $SCEN"; sed 's/^/    | /' "$OUT"; exit 1; fi

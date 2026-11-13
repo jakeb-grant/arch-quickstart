@@ -45,6 +45,8 @@ jobs:
           set -e
           for f in archiso/airootfs/usr/local/bin/* \
                    archiso/airootfs/usr/local/lib/*.sh \
+                   archiso/airootfs/usr/local/share/user-installs/*/install \
+                   archiso/airootfs/usr/local/share/user-installs/*/fetch \
                    archiso/profiledef.sh \
                    .github/scripts/*.sh; do
             echo "bash -n $f"
@@ -65,6 +67,9 @@ jobs:
             archiso/airootfs/usr/local/bin/printer-setup \
             archiso/airootfs/usr/local/bin/firewall-setup \
             archiso/airootfs/usr/local/bin/dotfiles-setup \
+            archiso/airootfs/usr/local/bin/user-installs-setup \
+            archiso/airootfs/usr/local/share/user-installs/*/install \
+            archiso/airootfs/usr/local/share/user-installs/*/fetch \
             archiso/airootfs/usr/local/lib/setup-common.sh \
             archiso/profiledef.sh \
             .github/scripts/*.sh
@@ -192,6 +197,11 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # /workspace is mounted into the build container, where AUR
+          # PKGBUILDs run with passwordless sudo: keep the job token out of
+          # .git/config (nothing in this job pushes)
+          persist-credentials: false
 
       - name: Start Arch Linux container
         # DOTFILES_REPO_INPUT is passed via env (not interpolated onto the
@@ -414,6 +424,28 @@ jobs:
 
             echo "Cloning dotfiles from: $DOTFILES_REPO"
             git clone --depth 1 -- "$DOTFILES_REPO" /workspace/archiso/airootfs/opt/dotfiles
+          '
+
+      - name: Bundle user-install payloads
+        # Each user install's fetch script (archiso/airootfs/usr/local/share/
+        # user-installs/<name>/fetch) downloads what its install needs into
+        # /opt/user-installs/<name> on the ISO. A failed fetch fails the build:
+        # the offline ISO would otherwise ship without the tool. The token is
+        # passed by name (docker exec -e NAME) and fetch scripts must keep it off
+        # their own command lines; it is this job's read-only token, used for
+        # GitHub's API rate limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          docker exec -e GITHUB_TOKEN archbuild bash -c '
+            set -euo pipefail
+            shopt -s nullglob
+            for fetch in /workspace/archiso/airootfs/usr/local/share/user-installs/*/fetch; do
+              name=$(basename "$(dirname "$fetch")")
+              echo "::group::Fetching $name"
+              bash "$fetch" "/workspace/archiso/airootfs/opt/user-installs/$name"
+              echo "::endgroup::"
+            done
           '
 
       - name: Build ISO

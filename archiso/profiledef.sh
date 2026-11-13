@@ -37,5 +37,6 @@ file_permissions=(
   ["/usr/local/bin/printer-setup"]="0:0:755"
   ["/usr/local/bin/firewall-setup"]="0:0:755"
   ["/usr/local/bin/dotfiles-setup"]="0:0:755"
+  ["/usr/local/bin/user-installs-setup"]="0:0:755"
   ["/usr/local/lib/setup-common.sh"]="0:0:644"
 )

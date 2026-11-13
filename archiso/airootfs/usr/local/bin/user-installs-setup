@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# User Installs Setup
+# ==============================================================================
+# Runs the user installs: tools installed for one user by a script, outside
+# pacman and the AUR (Strand, for one). Each is a directory in
+# /usr/local/share/user-installs holding an `install` script; see the README
+# there for how to add one.
+#
+# Usage:
+#   user-installs-setup               # Run every user install, in name order
+#   user-installs-setup <name>...     # Run the named ones
+#
+# Run it as the user the tools are for, never root: they install into ~.
+# Running one again updates it.
+#
+# Environment:
+#   USER_INSTALLS_PAYLOADS - a directory of <name>/ payloads bundled at ISO
+#                            build time (the offline ISO). A user install
+#                            whose payload is there installs from it, without
+#                            the network.
+#   USER_INSTALLS_DIR      - where the user installs live (default
+#                            /usr/local/share/user-installs)
+# ==============================================================================
+
+set -uo pipefail
+
+# Shared helpers (logging). Resolved relative to this script so it works
+# from the repo too.
+SETUP_LIB="$(dirname "$(readlink -f "$0")")/../lib/setup-common.sh"
+[[ -f "$SETUP_LIB" ]] || SETUP_LIB="/usr/local/lib/setup-common.sh"
+# shellcheck source=../lib/setup-common.sh
+source "$SETUP_LIB"
+
+HOOKS_DIR="${USER_INSTALLS_DIR:-/usr/local/share/user-installs}"
+PAYLOADS="${USER_INSTALLS_PAYLOADS:-}"
+
+if [[ $EUID -eq 0 ]]; then
+    error "Run this as the user the tools are for, not root (they install into ~)"
+fi
+
+names=("$@")
+if [[ ${#names[@]} -eq 0 ]]; then
+    for dir in "$HOOKS_DIR"/*/; do
+        [[ -f "$dir/install" ]] && names+=("$(basename "$dir")")
+    done
+fi
+
+if [[ ${#names[@]} -eq 0 ]]; then
+    info "No user installs in $HOOKS_DIR"
+    exit 0
+fi
+
+failed=()
+for name in "${names[@]}"; do
+    if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]] || [[ ! -f "$HOOKS_DIR/$name/install" ]]; then
+        warn "No user install named '$name' in $HOOKS_DIR"
+        failed+=("$name")
+        continue
+    fi
+
+    header "$name"
+    payload=""
+    if [[ -n "$PAYLOADS" ]] && [[ -d "$PAYLOADS/$name" ]]; then
+        payload="$PAYLOADS/$name"
+        info "Installing from the payload bundled on the ISO"
+    fi
+
+    # A subshell in ~ so a hook can rely on its working directory and
+    # cannot change ours
+    if (cd ~ && PAYLOAD="$payload" bash "$HOOKS_DIR/$name/install"); then
+        info "$name installed"
+    else
+        warn "$name failed"
+        failed+=("$name")
+    fi
+done
+
+if [[ ${#failed[@]} -gt 0 ]]; then
+    echo
+    warn "${#failed[@]} user install(s) failed: ${failed[*]}"
+    warn "Run them again with: user-installs-setup ${failed[*]}"
+    exit 1
+fi

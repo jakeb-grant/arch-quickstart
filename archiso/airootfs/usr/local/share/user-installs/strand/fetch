@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Bundles Strand's newest edge build for the offline ISO: the archive, its
+# .sha256 and the install.sh from the same GitHub release, into $1.
+# GITHUB_TOKEN, when set, raises GitHub's API rate limit.
+set -euo pipefail
+
+out=${1:?usage: fetch DIR}
+mkdir -p "$out"
+
+# The release JSON. The token goes to curl on stdin (-H @-), never in its
+# argv, where any process in the build container could read it
+release_json() {
+    local api=https://api.github.com/repos/jakeb-grant/strand/releases/tags/edge
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        curl -fsSL --retry 3 -H @- "$api" <<<"Authorization: Bearer $GITHUB_TOKEN"
+    else
+        curl -fsSL --retry 3 "$api"
+    fi
+}
+
+# One attempt: the newest build named by the release title, downloaded and
+# checked. Fails when an asset is missing or mid-upload (each edge build
+# re-uploads install.sh, delete then upload), so the caller asks again.
+fetch_once() {
+    local json commit url file want got
+    json=$(release_json) || return 1
+    # The edge release holds the newest build and the one before; its title,
+    # "edge: <commit> (<date>)", set once the newest is whole, names it (as
+    # install.sh reads it)
+    commit=$(jq -r '.name' <<<"$json" | sed -n 's/^edge: \([0-9a-f][0-9a-f]*\) .*$/\1/p')
+    [[ -n "$commit" ]] || { echo "strand fetch: edge release title names no commit" >&2; return 1; }
+    name="strand-edge-$commit-x86_64-linux.tar.gz"
+    for file in "$name" "$name.sha256" install.sh; do
+        url=$(jq -r --arg n "$file" '.assets[] | select(.name == $n) | .browser_download_url' <<<"$json")
+        [[ -n "$url" ]] || { echo "strand fetch: edge release has no $file" >&2; return 1; }
+        curl -fsSL --retry 3 -o "$out/$file" "$url" || return 1
+    done
+    want=$(cut -d' ' -f1 < "$out/$name.sha256")
+    got=$(sha256sum "$out/$name" | cut -d' ' -f1)
+    [[ -n "$want" && "$want" == "$got" ]] || { echo "strand fetch: $name does not match its checksum" >&2; return 1; }
+}
+
+name=
+for try in 1 2 3 4 5; do
+    if fetch_once; then
+        commit=${name#strand-edge-}
+        echo "Bundled strand edge ${commit%%-*}"
+        exit 0
+    fi
+    rm -f "$out"/strand-*.tar.gz "$out"/strand-*.tar.gz.sha256 "$out/install.sh"
+    [[ $try -lt 5 ]] && { echo "strand fetch: try $try failed, asking again in 30s" >&2; sleep 30; }
+done
+echo "strand fetch: gave up after 5 tries" >&2
+exit 1

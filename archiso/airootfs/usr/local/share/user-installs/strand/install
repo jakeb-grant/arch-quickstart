@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Strand, the desktop shell (https://strand.jacobgrant.dev), on the edge
+# channel: the dotfiles track Strand's main branch. Installs into
+# ~/.local/share/strand with `strand` linked from ~/.local/bin; running it
+# again updates it.
+set -euo pipefail
+
+if [[ -n "${PAYLOAD:-}" ]]; then
+    # Offline: the edge build and its install.sh, bundled by `fetch`
+    archive=$(compgen -G "$PAYLOAD/strand-*-x86_64-linux.tar.gz" | head -n 1) || true
+    [[ -n "$archive" ]] || { echo "strand: no release archive in $PAYLOAD" >&2; exit 1; }
+    sh "$PAYLOAD/install.sh" --from "$archive"
+    # --from records the release channel, so a later plain run of install.sh
+    # would update from releases; this install follows edge
+    # (install.sh's data directory: XDG_DATA_HOME only when absolute)
+    data=${XDG_DATA_HOME:-}
+    [[ "$data" == /* ]] || data=$HOME/.local/share
+    echo edge > "$data/strand/channel"
+else
+    script=$(mktemp)
+    trap 'rm -f "$script"' EXIT
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 2 -o "$script" \
+        https://strand.jacobgrant.dev/install.sh
+    sh "$script" --edge
+fi
