@@ -23,7 +23,7 @@
 #   teardown-active-swap ui-online-one-fails ui-offline-payload ui-none
 #   dot-preloaded-ok dot-preloaded-fails dot-init-fails dot-ctrl-c
 #   dot-remote-fails dot-exit-cleanup ext-all-ok ext-one-fails ext-ctrl-c
-#   ext-offline
+#   ext-offline net-offline-dhcp net-offline-none
 #   cfg-post-grub-fails cfg-post-grub-write-fails cfg-pre-grub-fails
 #   cfg-minimal spine fin-clean fin-notes fin-many
 #   review-install review-wrong-name review-quit review-change review-typo
@@ -48,6 +48,7 @@ SCENARIOS=(
     dot-preloaded-ok dot-preloaded-fails dot-init-fails dot-ctrl-c
     dot-remote-fails dot-exit-cleanup
     ext-all-ok ext-one-fails ext-ctrl-c ext-offline
+    net-offline-dhcp net-offline-none
     cfg-post-grub-fails cfg-post-grub-write-fails cfg-pre-grub-fails
     cfg-minimal
     spine
@@ -89,7 +90,7 @@ if [[ "$MODE" == exec ]]; then
     USERNAME=testuser
     # shellcheck disable=SC2034  # consumed by the sourced installer functions
     case "$SCEN" in
-        aur-offline-*|ext-offline) OFFLINE_MODE=1 ;;
+        aur-offline-*|ext-offline|net-*) OFFLINE_MODE=1 ;;
         aur-*|base-*)  OFFLINE_MODE=0 ;;
     esac
     # shellcheck disable=SC2034  # consumed by the sourced installer functions
@@ -130,6 +131,7 @@ if [[ "$MODE" == exec ]]; then
         ui-*)       run_user_installs ;;
         dot-exit-*) touch "$INSTALL_SUDOERS"; exit 1 ;;
         dot-*)      setup_dotfiles ;;
+        net-*)      check_network ;;
         ext-*)      install_extras
                     echo "CHROOT_TARGET after step: ${CHROOT_TARGET:-}" ;;
         cfg-*)      step system
@@ -266,6 +268,12 @@ fi
 if [[ "$SCEN" == ext-* || "$SCEN" == cfg-* ]]; then
     mount -t tmpfs none /usr/local/bin
     mount -t tmpfs none /usr/local/lib
+fi
+# The network check walks /sys/class/net for a wired link: give it one
+# interface, enp0s3, and none of the host's
+if [[ "$SCEN" == net-* ]]; then
+    mount -t tmpfs none /sys/class/net
+    mkdir /sys/class/net/enp0s3
 fi
 # Teardown and the failure card read the LUKS mapping's state: hide the
 # host's own, so no scenario depends on (or touches) it
@@ -518,6 +526,16 @@ case "$SCEN" in
                                       export S_CHEZMOI_RC=1 S_CHEZMOI_CONFIG=0 \
                                           S_GUM_INPUT=https://github.com/jakeb-grant/dotfiles.git ;;
     dot-exit-cleanup)                 : ;;
+    net-*)                            # no address until dhcpcd has run, and
+                                      # only then does curl reach archlinux.org
+                                      mkstub ip 'exit 0'
+                                      mkstub ping 'exit 1'
+                                      mkstub curl '[[ -e /root/dhcp.done ]]'
+                                      mkstub dhcpcd 'echo "dhcpcd $*" >> /root/calls.log
+[[ -n "${S_DHCP_FAIL:-}" ]] && exit 1
+touch /root/dhcp.done' ;;&
+    net-offline-none)                 export S_DHCP_FAIL=1 ;;
+    net-offline-dhcp)                 : ;;
     spine)                            : ;;
     fin-*)                            mkdir -p /mnt/etc /mnt/var/log
                                       mkstub curl 'exit 0'
@@ -801,6 +819,18 @@ case "$SCEN" in
         grep -E "^sudoers during (bluetooth|printer|firewall)-setup" "$CALLS" \
             && fail "the temporary sudo rule was there for a script that needs none"
         true ;;
+    net-offline-dhcp)
+        # the live ISO starts no DHCP client: the offline check asks for an
+        # address itself, as the online one does, and then has the network
+        want_rc0
+        grep -qx "dhcpcd -w enp0s3" "$CALLS" || fail "dhcpcd was not run for the wired link"
+        want "Network connected"
+        want_not "No network." ;;
+    net-offline-none)
+        # no address to be had: a warning, and the install carries on
+        want_rc0
+        grep -qx "dhcpcd -w enp0s3" "$CALLS" || fail "dhcpcd was not run for the wired link"
+        want "No network. The install doesn't need it; only remote dotfiles would." ;;
     ext-offline)
         # offline the driver comes from the ISO's repo, as root: no sudo rule
         want_rc0

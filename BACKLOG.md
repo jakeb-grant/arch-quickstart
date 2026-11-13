@@ -23,8 +23,8 @@ Severity: 🔴 critical · 🟠 high · 🟡 medium · ⚪ low/info.
 | AUR security audit | Reviewed PKGBUILDs + .install scriptlets + helper scripts of all 24 AUR package bases for malicious/risky execution. Verdict 2026-07-02: no malicious content; one weakness — railwayapp-cli pins no checksums (`sha256sums=('SKIP')` on a binary release). Everything else: official upstream sources with pinned hashes, benign scriptlets. Jacob's decision: accept and monitor (not production-critical) — review yay's PKGBUILD diff on railwayapp-cli updates. | ✅ |
 | Later (collaborative w/ Jacob) | Audit package lists against Jacob's current system — spot-check for missing packages his dotfiles/workflow expect. Interactive session, not solo agent work. | ✅ Done 2026-07-02 — 99/102 official + 21/22 AUR overlap; added duckdb + jq per Jacob; nothing dropped (list matches his real machine); flagged polkit-agent + terminus-font absence on his machine as observations |
 | VM acceptance test (2026-07-03) | V1, V2, V3 — findings from the first real install test (QEMU/OVMF, online ISO from CI run 28639461352). Full encrypted install succeeded end-to-end; R3 cleanup/re-run/cancel paths all validated in the wild. Plans in `VM-TEST-NOTES.md`. | ✅ Fixed 2026-07-03 (`576f08b`, `abdd5df`, `175e71a`; pushed, ISO run 28693998988). Acceptance run 2026-07-05 (offline ISO, 4G RAM, fresh disk + factory OVMF vars): install end-to-end ✅, disk-only boot via fallback loader ✅ (V2 closed), swap activate/release lifecycle ✅ (V3b closed; online-ISO build-OOM stress not yet re-run). |
-| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D4 done, D5 open (VM run) |
-| Installer UI (2026-11-12) | U1–U21 + F1–F7 — "the tide": glyphs and colours tty1 can draw, a masthead whose wave tracks the chapters, framed streamed steps, a review screen with the typed disk name as the one gate, a finish receipt. Spec in `UI-NOTES.md` (its "Build status" lists deviations). See section below. | 🚧 All 21 built 2026-11-13 in 5 sections, each verified (s5 50/50, glyph lint in CI, renders through ter-116n); F1, F2, F4, F5, F7 fixed; F3 fixed in code, its VM check in D5; F6, F8 fixed; the VM look open (in D5) |
+| Strand-era revisit (2026-11-12) | D1–D5 — dotfiles moved to Strand/Kitty/Lua Hyprland; package lists, Strand install, chroot dotfiles apply and docs out of date. See section below. | 🚧 D1–D4 done; D5: offline VM install passed 2026-11-13, online 4G run open |
+| Installer UI (2026-11-12) | U1–U21 + F1–F7 — "the tide": glyphs and colours tty1 can draw, a masthead whose wave tracks the chapters, framed streamed steps, a review screen with the typed disk name as the one gate, a finish receipt. Spec in `UI-NOTES.md` (its "Build status" lists deviations). See section below. | 🚧 All 21 built 2026-11-13 in 5 sections, each verified (s5 52/52, glyph lint in CI, renders through ter-116n); F1, F2, F4, F5, F7 fixed; F3 fixed in code, its VM check in D5; F6, F8, F9 fixed; the VM look open (in D5) |
 
 ---
 
@@ -382,6 +382,12 @@ dotfiles apply shows chezmoi's prompts and no sudo password prompts; no
 `90-arch-quickstart-install` left in `/etc/sudoers.d`; `rust` user install
 and zed-strand built (online).
 
+**Offline run, 2026-11-13** (branch `claude/installer-ui`, CI run
+43521605033, `-m 12G`, GPU setup skipped on virtio-vga): the install
+completed and the system booted to a working desktop ("works great").
+It found F9 (the offline ISO never asked for a DHCP address). Still open:
+the online ISO at 4G, and the itemised checks below on a run with F9 in.
+
 Installer UI on the same runs (from `UI-NOTES.md`, "Verification
 toolkit"; add `-monitor unix:/tmp/qmon.sock,server,nowait` to the QEMU line
 and capture the real console with `screendump`):
@@ -549,3 +555,10 @@ lists the built-with-deviation details.
   time; the spine, welcome route and receipt follow `main`'s order), or
   have `install_extras` defer only `nvidia-setup` to after the AUR step
   when online. Pre-existing; found by the S0 builder.
+- **✅ F9 (FIXED in code, 2026-11-13; found in the first D5 VM run)** — the
+  offline ISO never asked for a DHCP address: the live ISO starts no DHCP
+  client, and only the online path called `bring_up_ethernet` when the
+  check failed, so a wired VM or machine showed "No network" and remote
+  steps (rust, chezmoi scripts that download) failed. The offline check
+  now tries `bring_up_ethernet` too. s5 `net-offline-dhcp`,
+  `net-offline-none`.

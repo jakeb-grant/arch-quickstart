@@ -887,7 +887,9 @@ check_network() {
         info "Checking the network (optional here)..."
         echo
 
-        if test_network; then
+        # The live ISO starts no DHCP client, so a wired link has no address
+        # until asked for one, here as on the online path
+        if test_network || { bring_up_ethernet && sleep 2 && test_network; }; then
             success "Network connected"
         else
             warn "No network. The install doesn't need it; only remote dotfiles would."
